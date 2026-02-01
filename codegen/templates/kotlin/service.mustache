@@ -7,6 +7,12 @@
 // IMPORTANT: Method implementations (the code inside { }) are preserved during regeneration.
 // You can safely modify the implementation code. Only add/remove methods based on the TypeScript definition.
 //
+// USAGE:
+//   1. Register service factory at app startup:
+//      NativeRPCServiceCenter.register({{className}}.Factory)
+//
+//   2. Services are instantiated per-connection automatically
+//
 
 package {{packageName}}
 
@@ -30,16 +36,41 @@ import {{.}}
 {{/documentationLines}}
  */
 {{/hasDocumentation}}
-class {{className}} : {{baseClass}}("{{serviceName}}") {
+class {{className}}(context: NativeRPCContext? = null) : {{baseClass}}() {
+
+    // region Factory
+
+    companion object {
+        /**
+         * Factory for creating {{className}} instances per-connection.
+         * Register with: NativeRPCServiceCenter.register({{className}}.Factory)
+         */
+        val Factory = object : NativeRPCServiceFactory<{{className}}> {
+            override val serviceName = "{{serviceName}}"
+            override fun create(context: NativeRPCContext?) = {{className}}(context)
+        }
+    }
+
+    // endregion
+
+    // region Initialization
+
+    init {
+        this.internalContext = context
+    }
+
+    // endregion
 
     // region Service Definition
 
-    override fun definition() = service {
+    override fun definition() = serviceDefinition {
+        // Note: Name is auto-set from Factory.serviceName
+        
         {{#syncMethods}}
         {{#hasDocumentation}}
         // {{{documentation}}}
         {{/hasDocumentation}}
-        function("{{methodName}}") { {{#hasParams}}{{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}{{/hasParams}} ->
+        Function("{{methodName}}") { {{#hasParams}}{{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}{{/hasParams}} ->
             {{#existingImplementation}}
 {{{.}}}
             {{/existingImplementation}}
@@ -54,7 +85,7 @@ class {{className}} : {{baseClass}}("{{serviceName}}") {
         {{#hasDocumentation}}
         // {{{documentation}}}
         {{/hasDocumentation}}
-        suspendFunction("{{methodName}}") { {{#hasParams}}{{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}{{/hasParams}} ->
+        AsyncFunction("{{methodName}}") { {{#hasParams}}{{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}{{/hasParams}} ->
             {{#existingImplementation}}
 {{{.}}}
             {{/existingImplementation}}
@@ -69,7 +100,7 @@ class {{className}} : {{baseClass}}("{{serviceName}}") {
         {{#hasDocumentation}}
         // {{{documentation}}}
         {{/hasDocumentation}}
-        function("{{methodName}}") { {{#hasParams}}{{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}{{/hasParams}} ->
+        Function("{{methodName}}") { {{#hasParams}}{{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}{{/hasParams}} ->
             {{#existingImplementation}}
 {{{.}}}
             {{/existingImplementation}}
@@ -83,7 +114,7 @@ class {{className}} : {{baseClass}}("{{serviceName}}") {
         {{#hasDocumentation}}
         // Event: {{{documentation}}}
         {{/hasDocumentation}}
-        event("{{eventName}}")
+        Events("{{eventName}}")
         
         {{/events}}
     }

@@ -1,39 +1,43 @@
 // WebViewNativeRPCBridge.swift
 // NativeRPCKit
 //
-// WKWebView bridge that connects JavaScript to NativeRPCHost
+// WKWebView connection that enables JavaScript to call native services
 //
 // Usage:
 // ```swift
 // import WebKit
 // import NativeRPCKit
 //
-// class ViewController: UIViewController {
-//     let webView: WKWebView = ...
-//     let rpcHost = NativeRPCHost()
+// // 1. Register services at app startup
+// NativeRPCServiceCenter.shared.register(MyService.self)
 //
-//     override func viewDidLoad() {
-//         super.viewDidLoad()
+// // 2. Create WebView connection
+// let connection = WebViewNativeRPCConnection(webView: webView)
 //
-//         // Create and register bridge
-//         let bridge = WebViewNativeRPCBridge(webView: webView, host: rpcHost)
-//         bridge.attach()
-//     }
-// }
+// // 3. When done
+// connection.close()
 // ```
 
 #if canImport(WebKit)
 import Foundation
 import WebKit
 
-// MARK: - WebViewNativeRPCBridge
+// MARK: - WebViewNativeRPCConnection
 
-/// A bridge that connects JavaScript in a WKWebView to a NativeRPCHost.
+/// A connection that bridges JavaScript in a WKWebView to native RPC services.
 ///
-/// The bridge:
-/// - Receives JSON-RPC messages from JavaScript via WKScriptMessageHandler
-/// - Forwards messages to NativeRPCHost for processing
-/// - Sends responses and events back to JavaScript via evaluateJavaScript
+/// ## Simple Usage
+///
+/// ```swift
+/// // Register services first
+/// NativeRPCServiceCenter.shared.register(MyService.self)
+///
+/// // Create connection (auto-attaches to WebView)
+/// let connection = WebViewNativeRPCConnection(webView: webView)
+///
+/// // When done
+/// connection.close()
+/// ```
 ///
 /// ## JavaScript API
 ///
@@ -43,85 +47,107 @@ import WebKit
 /// // Send message to native
 /// window.webkit.messageHandlers.nativeRPC.postMessage(jsonString);
 ///
-/// // Receive message from native (bridge calls this)
-/// window.__nativeRPCCallbacks.onMessage(jsonString);
+/// // Receive message from native (set up callback first)
+/// window.__nativeRPCCallbacks = {
+///     onMessage: function(jsonString) {
+///         // Handle response or event
+///     }
+/// };
 /// ```
 ///
-/// ## Setup
+/// ## Iframe Support
 ///
-/// ```swift
-/// let bridge = WebViewNativeRPCBridge(webView: webView, host: rpcHost)
-/// bridge.attach()
-///
-/// // When done
-/// bridge.detach()
-/// ```
-public final class WebViewNativeRPCBridge: NSObject, WKScriptMessageHandler, @unchecked Sendable {
+/// The connection tracks `frameId` from requests and includes it in responses,
+/// enabling proper routing to iframes.
+public final class WebViewNativeRPCConnection: NativeRPCConnection, @unchecked Sendable {
     
     // MARK: - Properties
     
-    /// The WKWebView to bridge
+    /// The WKWebView this connection is bridged to
     private weak var webView: WKWebView?
-    
-    /// The NativeRPC host
-    private let host: NativeRPCHost
     
     /// Message handler name (default: "nativeRPC")
     private let handlerName: String
     
-    /// The connection to the host
-    private var connection: WebViewConnection?
-    
     /// Debug logging enabled
     public var debugEnabled: Bool = false
     
+    /// The script message handler (must be NSObject for WKWebView)
+    private var messageHandler: WebViewMessageHandler?
+    
+    /// Track frameId for each request ID (for iframe support)
+    private var pendingFrameIds: [String: String] = [:]
+    private let frameIdLock = NSLock()
+    
     // MARK: - Initialization
     
-    /// Create a new WebView bridge
+    /// Create a new WebView connection.
+    ///
+    /// The connection automatically attaches to the WebView and is ready to use.
     ///
     /// - Parameters:
     ///   - webView: The WKWebView to bridge
-    ///   - host: The NativeRPCHost to connect to
     ///   - handlerName: The JavaScript message handler name (default: "nativeRPC")
-    public init(webView: WKWebView, host: NativeRPCHost, handlerName: String = "nativeRPC") {
+    ///   - rootViewController: Optional root view controller for UI operations
+    public init(
+        webView: WKWebView,
+        handlerName: String = "nativeRPC",
+        rootViewController: NativeViewController? = nil
+    ) {
         self.webView = webView
-        self.host = host
         self.handlerName = handlerName
-        super.init()
+        
+        super.init(
+            connectionType: .webView,
+            rootView: webView,
+            rootViewController: rootViewController
+        )
+        
+        // Attach to WebView on main actor
+        // We're already on main thread (WKWebView requires it), but need to satisfy Swift Concurrency
+        MainActor.assumeIsolated {
+            attach()
+        }
     }
     
     // MARK: - Attach/Detach
     
-    /// Attach the bridge to the WebView
-    ///
-    /// This registers the message handler and creates the connection.
-    /// Call this before loading content in the WebView.
-    public func attach() {
+    /// Attach the bridge to the WebView (called automatically in init)
+    @MainActor
+    private func attach() {
         guard let webView = webView else { return }
+        
+        // Create message handler
+        let handler = WebViewMessageHandler { [weak self] jsonString in
+            self?.onMessageReceived(jsonString)
+        }
+        self.messageHandler = handler
         
         // Remove existing handler if any
         webView.configuration.userContentController.removeScriptMessageHandler(forName: handlerName)
         
         // Add message handler
-        webView.configuration.userContentController.add(self, name: handlerName)
+        webView.configuration.userContentController.add(handler, name: handlerName)
         
         // Inject early script to set up callbacks and dispatch ready event
         injectBridgeReadyScript(to: webView)
         
-        // Create connection
-        let conn = WebViewConnection(webView: webView, debugEnabled: debugEnabled)
-        self.connection = conn
+        log("WebView connection attached with handler '\(handlerName)'")
+    }
+    
+    /// Handle message received from JavaScript
+    private func onMessageReceived(_ jsonString: String) {
+        log("Received from JS: \(jsonString)")
         
-        // Register with host
-        host.addConnection(conn)
+        // Extract and store frameId from request (for iframe support)
+        storeFrameIdIfPresent(jsonString)
         
-        log("Bridge attached with handler '\(handlerName)'")
+        // Forward to stub via handleReceivedString
+        handleReceivedString(jsonString)
     }
     
     /// Inject a script that dispatches the bridge ready event when executed.
-    ///
-    /// On iOS, we can use WKUserScript to inject code at document start,
-    /// ensuring the bridge is available as early as possible.
+    @MainActor
     private func injectBridgeReadyScript(to webView: WKWebView) {
         let script = """
         (function() {
@@ -182,97 +208,14 @@ public final class WebViewNativeRPCBridge: NSObject, WKScriptMessageHandler, @un
         }
     }
     
-    /// Detach the bridge from the WebView
-    ///
-    /// This removes the message handler and disconnects from the host.
-    public func detach() {
-        guard let webView = webView else { return }
-        
-        // Remove message handler
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: handlerName)
-        
-        // Remove connection from host
-        if let conn = connection {
-            host.removeConnection(conn)
-            conn.close()
-            self.connection = nil
-        }
-        
-        log("Bridge detached")
-    }
+    // MARK: - Send (Override)
     
-    // MARK: - WKScriptMessageHandler
-    
-    /// Handle incoming message from JavaScript
-    public func userContentController(
-        _ userContentController: WKUserContentController,
-        didReceive message: WKScriptMessage
-    ) {
-        guard message.name == handlerName else { return }
-        
-        guard let jsonString = message.body as? String else {
-            log("Invalid message body type: \(type(of: message.body))")
-            return
-        }
-        
-        log("Received from JS: \(jsonString)")
-        
-        // Forward to connection
-        connection?.handleReceivedString(jsonString)
-    }
-    
-    // MARK: - Logging
-    
-    private func log(_ message: String) {
-        if debugEnabled {
-            print("[NativeRPC WebView] \(message)")
-        }
-    }
-}
-
-// MARK: - WebViewConnection
-
-/// Internal connection implementation for WKWebView.
-///
-/// Supports iframe routing by tracking frameId from requests and including it in responses.
-///
-/// Note: Marked `@unchecked Sendable` because:
-/// - `webView` is only accessed on main thread
-/// - `_isActive` transitions are unidirectional (true -> false)
-/// - `onMessage` is set once during initialization
-/// - `pendingFrameIds` uses a serial queue for thread safety
-final class WebViewConnection: NativeRPCConnection, @unchecked Sendable {
-    
-    let id: String
-    var onMessage: ((Data) -> Void)?
-    
-    private weak var webView: WKWebView?
-    private var _isActive: Bool = true
-    private let debugEnabled: Bool
-    
-    /// Track frameId for each request ID (for iframe support)
-    private var pendingFrameIds: [String: String] = [:]
-    private let lock = NSLock()
-    
-    var isActive: Bool { _isActive }
-    
-    init(webView: WKWebView, id: String = UUID().uuidString, debugEnabled: Bool = false) {
-        self.webView = webView
-        self.id = id
-        self.debugEnabled = debugEnabled
-    }
-    
-    /// Send data to JavaScript.
+    /// Send a JSON string to JavaScript.
     ///
     /// If the message is a response (has "id" field), we look up the frameId
     /// that was stored when the request was received and include it in the response.
-    func send(_ data: Data) {
-        guard _isActive, let webView = webView else { return }
-        
-        guard let jsonString = String(data: data, encoding: .utf8) else {
-            log("Failed to encode data as UTF-8")
-            return
-        }
+    public override func send(_ jsonString: String) {
+        guard isActive else { return }
         
         // Try to inject frameId into response
         let jsonWithFrameId = injectFrameIdIntoResponse(jsonString)
@@ -285,13 +228,55 @@ final class WebViewConnection: NativeRPCConnection, @unchecked Sendable {
         
         log("Sending to JS: \(jsonWithFrameId)")
         
-        DispatchQueue.main.async { [weak webView] in
-            webView?.evaluateJavaScript(script) { _, error in
+        DispatchQueue.main.async { [weak self] in
+            self?.webView?.evaluateJavaScript(script) { _, error in
                 if let error = error {
                     print("[NativeRPC WebView] JS eval error: \(error)")
                 }
             }
         }
+    }
+    
+    // MARK: - Close (Override)
+    
+    /// Close the connection and detach from WebView.
+    public override func close() {
+        // Detach from WebView
+        if let webView = webView {
+            DispatchQueue.main.async { [weak webView, handlerName] in
+                webView?.configuration.userContentController.removeScriptMessageHandler(forName: handlerName)
+            }
+        }
+        
+        // Clear message handler
+        messageHandler = nil
+        
+        // Clear frameId tracking
+        frameIdLock.lock()
+        pendingFrameIds.removeAll()
+        frameIdLock.unlock()
+        
+        // Call super to clean up stub and context
+        super.close()
+        
+        log("WebView connection closed")
+    }
+    
+    // MARK: - Frame ID Support (for iframes)
+    
+    /// Extract and store frameId from a request for later response routing.
+    private func storeFrameIdIfPresent(_ jsonString: String) {
+        guard let data = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let requestId = json["id"] as? String,
+              let frameId = json["frameId"] as? String else {
+            return
+        }
+        
+        frameIdLock.lock()
+        pendingFrameIds[requestId] = frameId
+        frameIdLock.unlock()
+        log("Stored frameId '\(frameId)' for request '\(requestId)'")
     }
     
     /// Inject the stored frameId into a response message.
@@ -308,9 +293,9 @@ final class WebViewConnection: NativeRPCConnection, @unchecked Sendable {
         }
         
         // Look up and remove the stored frameId
-        lock.lock()
+        frameIdLock.lock()
         let frameId = pendingFrameIds.removeValue(forKey: requestId)
-        lock.unlock()
+        frameIdLock.unlock()
         
         guard let frameId = frameId else {
             return jsonString
@@ -327,37 +312,7 @@ final class WebViewConnection: NativeRPCConnection, @unchecked Sendable {
         return modifiedString
     }
     
-    func close() {
-        _isActive = false
-        onMessage = nil
-        lock.lock()
-        pendingFrameIds.removeAll()
-        lock.unlock()
-    }
-    
-    /// Handle received string from JavaScript.
-    ///
-    /// Extracts and stores frameId from the request for later response routing.
-    func handleReceivedString(_ string: String) {
-        guard _isActive else { return }
-        
-        // Extract and store frameId from request
-        if let data = string.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let requestId = json["id"] as? String,
-           let frameId = json["frameId"] as? String {
-            lock.lock()
-            pendingFrameIds[requestId] = frameId
-            lock.unlock()
-            log("Stored frameId '\(frameId)' for request '\(requestId)'")
-        }
-        
-        guard let data = string.data(using: .utf8) else {
-            log("Failed to encode string as UTF-8")
-            return
-        }
-        onMessage?(data)
-    }
+    // MARK: - Helpers
     
     /// Escape a string for safe inclusion in JavaScript
     private func escapeForJavaScript(_ string: String) -> String {
@@ -377,20 +332,46 @@ final class WebViewConnection: NativeRPCConnection, @unchecked Sendable {
     }
 }
 
+// MARK: - WebViewMessageHandler (Internal)
+
+/// Internal NSObject-based message handler for WKWebView
+private final class WebViewMessageHandler: NSObject, WKScriptMessageHandler {
+    
+    private let onMessage: (String) -> Void
+    
+    init(onMessage: @escaping (String) -> Void) {
+        self.onMessage = onMessage
+        super.init()
+    }
+    
+    func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        guard let jsonString = message.body as? String else {
+            print("[NativeRPC WebView] Invalid message body type: \(type(of: message.body))")
+            return
+        }
+        onMessage(jsonString)
+    }
+}
+
 // MARK: - Convenience Extension
 
 public extension WKWebView {
     
-    /// Create a NativeRPC bridge for this WebView
+    /// Create a NativeRPC connection for this WebView.
+    ///
+    /// Make sure to register your services first:
+    /// ```swift
+    /// NativeRPCServiceCenter.shared.register(MyService.self)
+    /// ```
     ///
     /// - Parameters:
-    ///   - host: The NativeRPCHost to connect to
     ///   - handlerName: The JavaScript message handler name (default: "nativeRPC")
-    /// - Returns: The bridge (you must keep a strong reference to it)
-    func createNativeRPCBridge(host: NativeRPCHost, handlerName: String = "nativeRPC") -> WebViewNativeRPCBridge {
-        let bridge = WebViewNativeRPCBridge(webView: self, host: host, handlerName: handlerName)
-        bridge.attach()
-        return bridge
+    /// - Returns: The connection (keep a strong reference to it)
+    func createNativeRPCConnection(handlerName: String = "nativeRPC") -> WebViewNativeRPCConnection {
+        return WebViewNativeRPCConnection(webView: self, handlerName: handlerName)
     }
 }
 

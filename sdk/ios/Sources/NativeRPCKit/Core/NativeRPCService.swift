@@ -10,6 +10,9 @@ import Foundation
 // - ServiceDefinition.swift (LifecycleType, etc.)
 // - NativeRPCMessage.swift (NativeRPCEvent)
 // - NativeRPCError.swift (NativeRPCError)
+// - NativeRPCContext.swift (NativeRPCContext, NativeRPCConnectionType)
+// - NativeRPCStub.swift (NativeRPCStub)
+// - NativeRPCServiceCenter.swift (NativeRPCServiceRegistrable)
 
 // MARK: - Service Protocol
 
@@ -18,63 +21,97 @@ public protocol NativeRPCServiceProtocol: AnyObject {
     /// Build the service definition using DSL
     @ServiceDefinitionBuilder
     func definition() -> ServiceDefinitionContainer
-    
-    /// Called when the service is registered with a host
-    func onRegistered(host: NativeRPCHostProtocol)
-}
-
-// MARK: - Host Protocol (forward declaration)
-
-/// Protocol for the RPC host that manages services
-public protocol NativeRPCHostProtocol: AnyObject {
-    /// Send an event notification to all subscribers
-    /// Notification format: {"method": "service.event", "params": {...}}
-    func sendEvent(_ notification: NativeRPCNotification)
-    
-    /// Convenience method to send event with separate params
-    func sendEvent(service: String, event: String, params: Any?)
-    
-    /// Get a registered service by name
-    func getService(_ name: String) -> NativeRPCServiceProtocol?
 }
 
 // MARK: - NativeRPCService Base Class
 
 /// Base class for NativeRPC services.
 ///
-/// Subclass this and override `definition()` to define your service:
+/// Subclass this and override `definition()` to define your service.
+/// Services are instantiated per-connection with a context that provides
+/// connection-scoped state and configuration.
+///
+/// ## New Architecture (v2.1)
+///
+/// Services are now:
+/// - **Registered by type** at app startup via `NativeRPCServiceCenter`
+/// - **Instantiated per-connection** when first called
+/// - **Destroyed** when the connection closes
 ///
 /// ```swift
+/// // Define your service
 /// class MyService: NativeRPCService {
+///     // Required: provide static service name for registration
+///     override class var serviceName: String { "myService" }
+///     
+///     // Required: init with context
+///     required init(context: NativeRPCContext?) {
+///         super.init(context: context)
+///     }
+///     
 ///     @ServiceDefinitionBuilder
 ///     override func definition() -> ServiceDefinitionContainer {
-///         Name("myService")
-///
-///         Constant("version") { "1.0.0" }
-///
-///         Function("add") { (a: Int, b: Int) -> Int in
-///             a + b
+///         // Name() is optional - auto-inferred from serviceName
+///         
+///         Function("getUserId") { () -> String? in
+///             // Access connection-scoped context
+///             self.context?.get("userId")
 ///         }
-///
+///         
 ///         AsyncFunction("fetchData") { (id: String) async throws -> Data in
 ///             try await self.repository.fetch(id)
 ///         }
-///
+///         
 ///         Events("dataChanged", "statusUpdated")
 ///     }
 /// }
+///
+/// // Register at app startup
+/// NativeRPCServiceCenter.shared.register(MyService.self)
 /// ```
 ///
-/// Note: Marked `@unchecked Sendable` because mutable state (`host`, `_definitionContainer`)
-/// is accessed in controlled ways: `host` is set once on registration, and
+/// Note: Marked `@unchecked Sendable` because mutable state (`stub`, `_definitionContainer`)
+/// is accessed in controlled ways: `stub` is set once on creation, and
 /// `_definitionContainer` is lazily initialized (race-safe via single-threaded access pattern).
-/// Safety invariant: Services are registered once and accessed through the host's synchronization.
-open class NativeRPCService: NativeRPCServiceProtocol, @unchecked Sendable {
+/// Safety invariant: Services are created once per connection and accessed through the stub's synchronization.
+open class NativeRPCService: NativeRPCServiceProtocol, NativeRPCServiceRegistrable, @unchecked Sendable {
     
-    // MARK: - Properties
+    // MARK: - Static Properties (for NativeRPCServiceRegistrable)
     
-    /// Weak reference to the host
-    public weak var host: NativeRPCHostProtocol?
+    /// The unique name identifying this service.
+    /// Override this in subclasses to provide the service name.
+    ///
+    /// Example:
+    /// ```swift
+    /// override class var serviceName: String { "counter" }
+    /// ```
+    open class var serviceName: String {
+        // Default implementation returns the class name (lowercased first letter)
+        let className = String(describing: self)
+        guard let first = className.first else { return "unnamed" }
+        return first.lowercased() + className.dropFirst()
+    }
+    
+    /// Connection types this service supports.
+    /// Override to restrict which connection types can use this service.
+    ///
+    /// Example:
+    /// ```swift
+    /// override class var supportedConnectionTypes: Set<NativeRPCConnectionType> {
+    ///     [.flutter, .webView]  // Only Flutter and WebView
+    /// }
+    /// ```
+    open class var supportedConnectionTypes: Set<NativeRPCConnectionType> {
+        [.flutter, .webView, .webSocket, .reactNative, .custom]
+    }
+    
+    // MARK: - Instance Properties
+    
+    /// The context for this connection (contains connection info and shared storage)
+    public let context: NativeRPCContext?
+    
+    /// Weak reference to the stub that owns this service
+    public internal(set) weak var stub: NativeRPCStub?
     
     /// Cached service definition container
     private var _definitionContainer: ServiceDefinitionContainer?
@@ -87,38 +124,53 @@ open class NativeRPCService: NativeRPCServiceProtocol, @unchecked Sendable {
         return _definitionContainer!
     }
     
-    /// The service name (from definition)
+    /// The service name (from definition or class property)
     public var name: String {
         return definitionContainer.serviceName
     }
     
     // MARK: - Initialization
     
-    public init() {}
+    /// Create a new service instance with the given context.
+    ///
+    /// Subclasses MUST override this initializer and call `super.init(context:)`.
+    ///
+    /// - Parameter context: The connection context (nil for testing)
+    public required init(context: NativeRPCContext?) {
+        self.context = context
+        // Trigger create lifecycle
+        _ = definitionContainer  // Force lazy init
+        
+        // Always set service name from class property (Name() is no longer used)
+        definitionContainer.setServiceName(Self.serviceName)
+        
+        definitionContainer.triggerLifecycle(.create)
+    }
+    
+    /// Convenience initializer for testing without context
+    public convenience init() {
+        self.init(context: nil)
+    }
     
     // MARK: - Definition (override in subclass)
     
     /// Override this method to define your service using the DSL.
     ///
     /// Use `@ServiceDefinitionBuilder` attribute when overriding.
+    /// Note: `Name()` is optional - if not specified, the service name
+    /// will be automatically inferred from `serviceName` class property.
     @ServiceDefinitionBuilder
     open func definition() -> ServiceDefinitionContainer {
         // Empty definition - subclasses should override
-        Name("unnamed")
+        // Service name will be auto-inferred from serviceName class property
     }
     
     // MARK: - Lifecycle
     
-    /// Called when the service is registered with a host
-    open func onRegistered(host: NativeRPCHostProtocol) {
-        self.host = host
-        definitionContainer.triggerLifecycle(.create)
-    }
-    
     /// Called when the service is being destroyed
     public func destroy() {
         definitionContainer.triggerLifecycle(.destroy)
-        host = nil
+        stub = nil
     }
     
     /// Called when the app enters foreground
@@ -144,7 +196,12 @@ open class NativeRPCService: NativeRPCServiceProtocol, @unchecked Sendable {
             throw NativeRPCError.eventNotDeclared(name, service: self.name)
         }
         
-        host?.sendEvent(service: self.name, event: name, params: data)
+        guard let stub = stub else {
+            print("[NativeRPC] Warning: Cannot send event '\(name)' - service not attached to stub")
+            return
+        }
+        
+        stub.sendEvent(service: self.name, event: name, params: data)
     }
     
     /// Send an event without throwing (logs error if event not declared)
@@ -204,17 +261,11 @@ open class NativeRPCService: NativeRPCServiceProtocol, @unchecked Sendable {
     public func onStopObserving(event: String? = nil) {
         definitionContainer.stopObserving(event: event)
     }
-}
-
-// MARK: - Service Registry Helper
-
-/// A type-erased service wrapper for registration
-public struct AnyNativeRPCService {
-    public let name: String
-    public let service: NativeRPCServiceProtocol
     
-    public init(_ service: NativeRPCService) {
-        self.name = service.name
-        self.service = service
+    // MARK: - Context Convenience
+    
+    /// Get the connection type (convenience accessor)
+    public var connectionType: NativeRPCConnectionType? {
+        return context?.connectionType
     }
 }

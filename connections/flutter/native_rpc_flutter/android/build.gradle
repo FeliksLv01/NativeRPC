@@ -51,6 +51,10 @@ android {
     }
 
     dependencies {
+        // NativeRPC SDK - depends on the SDK module which must be included
+        // by the host app's settings.gradle (see examples/flutter_counter/android/settings.gradle.kts)
+        implementation project(':nativerpc-sdk')
+        
         implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$serialization_version")
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")

@@ -128,6 +128,13 @@ class ServiceDefinitionContainer {
     var serviceName: String = ""
         private set
     
+    /**
+     * Set the service name (used for auto-inference when Name() is not called)
+     */
+    fun setServiceName(name: String) {
+        serviceName = name
+    }
+    
     private val syncFunctions = mutableMapOf<String, SyncFunction>()
     private val asyncFunctions = mutableMapOf<String, AsyncFunction>()
     private val constants = mutableMapOf<String, () -> Any?>()

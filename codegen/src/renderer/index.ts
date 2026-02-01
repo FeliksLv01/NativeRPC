@@ -632,7 +632,12 @@ export class KotlinRenderer extends ServiceRenderer {
     return {
       sourceFile: 'services.ts',
       timestamp: new Date().toISOString(),
-      imports: ['com.itoken.team.nativerpc.core.NativeRPCService'],
+      imports: [
+        'com.itoken.team.nativerpc.core.NativeRPCService',
+        'com.itoken.team.nativerpc.core.NativeRPCContext',
+        'com.itoken.team.nativerpc.core.NativeRPCServiceFactory',
+        'com.itoken.team.nativerpc.dsl.serviceDefinition',
+      ],
       packageName: this.packageName,
       customTypes: module.customTypes.map(t => this.buildCustomTypeView(t, t.fields)),
       enums: module.enums.map(e => this.buildEnumView(e)),

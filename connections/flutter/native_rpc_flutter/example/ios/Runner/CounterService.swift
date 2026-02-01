@@ -4,10 +4,13 @@
 // A simple counter service demonstrating NativeRPC DSL usage
 
 import Foundation
-import native_rpc
+import NativeRPCKit
 
 /// Example CounterService that demonstrates the NativeRPC DSL
 class CounterService: NativeRPCService, @unchecked Sendable {
+    
+    /// The unique service name for registration
+    override class var serviceName: String { "counter" }
     
     /// The current counter value
     private var count: Int = 0
@@ -15,7 +18,7 @@ class CounterService: NativeRPCService, @unchecked Sendable {
     /// Build the service definition using the DSL
     @ServiceDefinitionBuilder
     override func definition() -> ServiceDefinitionContainer {
-        Name("counter")
+        // Note: Name is auto-set from serviceName class property
         
         // Constants - use explicit closure syntax
         Constant("initialValue", 0)

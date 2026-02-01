@@ -74,11 +74,36 @@ public final class SyncFunctionDefinition<Args, R>: AnySyncFunction {
             if let converted = try? ArgumentConverter.convert(firstArg, to: Args.self) {
                 return converted
             }
+            
+            // NEW: If first arg is a dictionary, try to extract values
+            if let dict = firstArg as? [String: Any] {
+                // Single value dict - extract the value
+                if dict.count == 1, let value = dict.values.first {
+                    if let converted = try? ArgumentConverter.convert(value, to: Args.self) {
+                        return converted
+                    }
+                }
+            }
         }
         
         // Try tuple conversion
         if let tuple = tupleFromArray(args, type: Args.self) {
             return tuple
+        }
+        
+        // NEW: If single arg is dict with multiple values, try extracting values as tuple
+        if let dict = args.first as? [String: Any], dict.count == argumentsCount {
+            let values = Array(dict.values)
+            if let tuple = tupleFromArray(values, type: Args.self) {
+                return tuple
+            }
+            // Also try with ArgumentConverter for each value
+            let convertedValues = values.compactMap { value -> Any? in
+                return value
+            }
+            if let tuple = tupleFromArray(convertedValues, type: Args.self) {
+                return tuple
+            }
         }
         
         throw NativeRPCError.invalidArguments("Cannot convert arguments to expected type")
@@ -172,11 +197,29 @@ public final class AsyncFunctionDefinition<Args, R>: AnyAsyncFunction, @unchecke
             if let converted = try? ArgumentConverter.convert(firstArg, to: Args.self) {
                 return converted
             }
+            
+            // NEW: If first arg is a dictionary, try to extract values
+            if let dict = firstArg as? [String: Any] {
+                // Single value dict - extract the value
+                if dict.count == 1, let value = dict.values.first {
+                    if let converted = try? ArgumentConverter.convert(value, to: Args.self) {
+                        return converted
+                    }
+                }
+            }
         }
         
         // Try tuple conversion
         if let tuple = tupleFromArray(args, type: Args.self) {
             return tuple
+        }
+        
+        // NEW: If single arg is dict with multiple values, try extracting values as tuple
+        if let dict = args.first as? [String: Any], dict.count == argumentsCount {
+            let values = Array(dict.values)
+            if let tuple = tupleFromArray(values, type: Args.self) {
+                return tuple
+            }
         }
         
         throw NativeRPCError.invalidArguments("Cannot convert arguments to expected type")
@@ -294,11 +337,29 @@ public final class PromiseAsyncFunctionDefinition<Args>: AnyAsyncFunction, @unch
             if let converted = try? ArgumentConverter.convert(firstArg, to: Args.self) {
                 return converted
             }
+            
+            // NEW: If first arg is a dictionary, try to extract values
+            if let dict = firstArg as? [String: Any] {
+                // Single value dict - extract the value
+                if dict.count == 1, let value = dict.values.first {
+                    if let converted = try? ArgumentConverter.convert(value, to: Args.self) {
+                        return converted
+                    }
+                }
+            }
         }
         
         // Try tuple conversion
         if let tuple = tupleFromArray(args, type: Args.self) {
             return tuple
+        }
+        
+        // NEW: If single arg is dict with multiple values, try extracting values as tuple
+        if let dict = args.first as? [String: Any], dict.count == argumentsCount {
+            let values = Array(dict.values)
+            if let tuple = tupleFromArray(values, type: Args.self) {
+                return tuple
+            }
         }
         
         throw NativeRPCError.invalidArguments("Cannot convert arguments to expected type")

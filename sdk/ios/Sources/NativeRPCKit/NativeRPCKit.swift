@@ -15,8 +15,10 @@
 // Core/
 // - NativeRPCMessage.swift: NativeRPCMessageType, NativeRPCRequest, NativeRPCResponse, NativeRPCEvent, NativeRPCSubscription, NativeRPCErrorInfo
 // - NativeRPCError.swift: NativeRPCError
-// - NativeRPCService.swift: NativeRPCServiceProtocol, NativeRPCHostProtocol, NativeRPCService, AnyNativeRPCService
-// - NativeRPCHost.swift: NativeRPCHost, ServiceInfo
+// - NativeRPCService.swift: NativeRPCServiceProtocol, NativeRPCService
+// - NativeRPCServiceCenter.swift: NativeRPCServiceCenter, NativeRPCServiceRegistrable
+// - NativeRPCStub.swift: NativeRPCStub, NativeRPCStubDelegate
+// - NativeRPCContext.swift: NativeRPCContext, NativeRPCConnectionType
 
 // DSL/
 // - ServiceDefinition.swift: AnyDefinition, AnyServiceDefinitionElement, AnySyncFunction, AnyAsyncFunction, SyncFunctionDefinition, AsyncFunctionDefinition, ConstantDefinition, ServiceNameDefinition, EventsDefinition, EventObservingType, EventObservingDefinition, LifecycleType, LifecycleDefinition
@@ -27,9 +29,9 @@
 // - AnyCodable.swift: AnyCodable
 
 // Connection/
-// - NativeRPCConnection.swift: NativeRPCConnection, BaseNativeRPCConnection, CallbackConnection, InMemoryConnectionPair
+// - NativeRPCConnection.swift: NativeRPCConnection, CallbackConnection, InMemoryConnectionPair
 // Note: FlutterMethodChannelConnection is provided by native_rpc_flutter plugin
 
 // WebView/
-// - WebViewNativeRPCBridge.swift: WebViewNativeRPCBridge, WebViewConnection (WKWebView support)
+// - WebViewNativeRPCBridge.swift: WebViewNativeRPCConnection (WKWebView support)
 // Note: Only available when WebKit is available (iOS, macOS)

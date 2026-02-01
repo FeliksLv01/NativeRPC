@@ -1,68 +1,146 @@
 // NativeRPCConnection.kt
 // NativeRPC v2
 //
-// Connection protocol and base implementations
+// Connection base class that creates its own context and stub.
+// Each connection manages its own per-connection service instances.
 
 package com.itoken.team.nativerpc.connection
 
+import android.app.Activity
+import android.view.View
+import com.itoken.team.nativerpc.core.NativeRPCConnectionType
+import com.itoken.team.nativerpc.core.NativeRPCContext
+import com.itoken.team.nativerpc.core.NativeRPCStub
+import com.itoken.team.nativerpc.core.NativeRPCStubDelegate
 import java.util.UUID
 
 /**
- * Protocol for connections between native and clients (Flutter, WebView, etc.)
+ * Base class for NativeRPC connections.
+ *
+ * Each connection creates its own context and stub. The stub manages
+ * per-connection service instances that are lazily created when first called.
+ *
+ * Subclasses must override `send()` to implement the transport layer.
+ *
+ * Usage:
+ * ```kotlin
+ * // 1. Register services at app startup
+ * NativeRPCServiceCenter.register(CounterService.Factory)
+ *
+ * // 2. Create connection (auto-starts)
+ * val connection = FlutterMethodChannelConnection(channel)
+ *
+ * // 3. When receiving data from client:
+ * connection.handleReceivedData(jsonString)
+ *
+ * // 4. When done:
+ * connection.close()  // destroys all service instances for this connection
+ * ```
  */
-interface NativeRPCConnection {
+abstract class NativeRPCConnection(
+    /** The type of this connection */
+    val connectionType: NativeRPCConnectionType,
+    /** Optional root view for UI operations */
+    rootView: View? = null,
+    /** Optional activity for UI operations */
+    activity: Activity? = null,
+    /** Custom connection type name (when connectionType == CUSTOM) */
+    customTypeName: String? = null
+) : NativeRPCStubDelegate {
     
-    /**
-     * Unique identifier for this connection
-     */
-    val id: String
+    // MARK: - Properties
     
-    /**
-     * Callback invoked when a message is received from the client
-     */
-    var onMessage: ((String) -> Unit)?
+    /** Unique identifier for this connection (internal use only) */
+    private val id: String = UUID.randomUUID().toString()
     
-    /**
-     * Send a message to the client
-     */
-    fun send(data: String)
+    /** The context for this connection (created automatically) */
+    val context: NativeRPCContext = NativeRPCContext(
+        connectionType = connectionType,
+        customConnectionTypeName = customTypeName,
+        rootView = rootView,
+        activity = activity
+    )
     
-    /**
-     * Close the connection
-     */
-    fun close()
+    /** The stub that manages services for this connection (created automatically) */
+    val stub: NativeRPCStub = NativeRPCStub(context)
     
-    /**
-     * Check if the connection is active
-     */
-    val isActive: Boolean
-}
-
-/**
- * Abstract base class for connections with common functionality
- */
-abstract class BaseNativeRPCConnection(
-    override val id: String = UUID.randomUUID().toString()
-) : NativeRPCConnection {
-    
-    override var onMessage: ((String) -> Unit)? = null
-    
+    /** Whether this connection is currently active */
     @Volatile
-    protected var _isActive: Boolean = true
-    override val isActive: Boolean get() = _isActive
+    var isActive: Boolean = true
+        protected set
     
-    override fun close() {
-        _isActive = false
-        onMessage = null
+    // MARK: - Initialization
+    
+    init {
+        // Wire up the stub to use this connection for sending
+        stub.delegate = this
+        println("[NativeRPC] Connection created: $id (${connectionType.value})")
+    }
+    
+    // MARK: - Abstract Methods (Subclass must implement)
+    
+    /**
+     * Send data to the client.
+     *
+     * Subclasses must implement this to send the JSON string over the transport.
+     *
+     * @param data The JSON string to send
+     */
+    abstract fun send(data: String)
+    
+    // MARK: - NativeRPCStubDelegate
+    
+    /**
+     * Called by the stub when it needs to send a message.
+     * This forwards to the abstract send() method.
+     */
+    override fun sendMessage(data: String) {
+        if (!isActive) return
+        send(data)
+    }
+    
+    // MARK: - Public API
+    
+    /**
+     * Handle data received from the client.
+     *
+     * Call this from your transport layer when receiving JSON data.
+     *
+     * @param data The raw JSON string received
+     */
+    fun handleReceivedData(data: String) {
+        if (!isActive) return
+        stub.handleIncomingMessage(data)
     }
     
     /**
-     * Helper to receive message and invoke callback.
-     * Subclasses should call this when receiving data from the client.
+     * Close the connection and clean up all resources.
+     *
+     * This destroys all service instances for this connection.
      */
-    protected fun handleReceivedData(data: String) {
-        if (!_isActive) return
-        onMessage?.invoke(data)
+    open fun close() {
+        if (!isActive) return
+        
+        isActive = false
+        stub.shutdown()
+        
+        println("[NativeRPC] Connection closed: $id")
+    }
+    
+    // MARK: - Lifecycle
+    
+    /**
+     * Call when the app enters foreground
+     */
+    fun onAppForeground() {
+        stub.onAppForeground()
+    }
+    
+    /**
+     * Call when the app enters background
+     */
+    fun onAppBackground() {
+        stub.onAppBackground()
     }
 }
 
@@ -71,33 +149,20 @@ abstract class BaseNativeRPCConnection(
  * Useful for testing or custom integration scenarios.
  */
 class CallbackConnection(
-    id: String = UUID.randomUUID().toString(),
+    connectionType: NativeRPCConnectionType = NativeRPCConnectionType.CUSTOM,
     private val sendHandler: (String) -> Unit
-) : NativeRPCConnection {
-    
-    override val id: String = id
-    override var onMessage: ((String) -> Unit)? = null
-    
-    @Volatile
-    private var _isActive: Boolean = true
-    override val isActive: Boolean get() = _isActive
+) : NativeRPCConnection(connectionType) {
     
     override fun send(data: String) {
-        if (!_isActive) return
+        if (!isActive) return
         sendHandler(data)
-    }
-    
-    override fun close() {
-        _isActive = false
-        onMessage = null
     }
     
     /**
      * Call this to simulate receiving a message from the client
      */
     fun receive(data: String) {
-        if (!_isActive) return
-        onMessage?.invoke(data)
+        handleReceivedData(data)
     }
 }
 
@@ -114,11 +179,11 @@ class InMemoryConnectionPair {
         var clientRef: CallbackConnection? = null
         var serverRef: CallbackConnection? = null
         
-        client = CallbackConnection(id = "client") { data ->
+        client = CallbackConnection { data ->
             serverRef?.receive(data)
         }
         
-        server = CallbackConnection(id = "server") { data ->
+        server = CallbackConnection { data ->
             clientRef?.receive(data)
         }
         

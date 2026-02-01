@@ -1,0 +1,3 @@
+packages:
+  - 'connections/web'
+  - 'examples/web-counter'

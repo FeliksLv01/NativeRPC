@@ -8,6 +8,24 @@ import Foundation
 // MARK: - Service Name
 
 /// Defines the name of the service
+///
+/// - Note: **Deprecated in v2.2** - Service name is now automatically set from the
+///   `serviceName` class property. You no longer need to call `Name()` in your definition.
+///
+/// ```swift
+/// // Before (deprecated):
+/// override func definition() -> ServiceDefinitionContainer {
+///     Name("counter")  // ❌ No longer needed
+///     Function("getValue") { ... }
+/// }
+///
+/// // After:
+/// override class var serviceName: String { "counter" }  // ✅ Define here
+/// override func definition() -> ServiceDefinitionContainer {
+///     Function("getValue") { ... }  // Name is auto-set
+/// }
+/// ```
+@available(*, deprecated, message: "Name() is no longer needed. Service name is automatically set from the serviceName class property.")
 public func Name(_ name: String) -> ServiceNameDefinition {
     ServiceNameDefinition(name: name)
 }

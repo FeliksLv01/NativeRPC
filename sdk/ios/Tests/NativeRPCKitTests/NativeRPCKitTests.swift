@@ -13,11 +13,13 @@ final class NativeRPCKitTests: XCTestCase {
     func testServiceDefinitionDSL() {
         // Create a test service
         class TestService: NativeRPCService {
+            override class var serviceName: String { "test" }
+            
             var addCallCount = 0
             
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                Name("test")
+                // Name() is no longer needed - serviceName is used automatically
                 
                 Function("add") { [weak self] (a: Int, b: Int) -> Int in
                     self?.addCallCount += 1
@@ -50,10 +52,10 @@ final class NativeRPCKitTests: XCTestCase {
     
     func testSyncFunctionCall() async throws {
         class MathService: NativeRPCService {
+            override class var serviceName: String { "math" }
+            
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                Name("math")
-                
                 Function("add") { (a: Int, b: Int) -> Int in
                     a + b
                 }
@@ -77,10 +79,10 @@ final class NativeRPCKitTests: XCTestCase {
     
     func testAsyncFunctionCall() async throws {
         class AsyncService: NativeRPCService {
+            override class var serviceName: String { "async" }
+            
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                Name("async")
-                
                 AsyncFunction("delay") { (ms: Int) async -> String in
                     try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
                     return "done after \(ms)ms"
@@ -94,85 +96,62 @@ final class NativeRPCKitTests: XCTestCase {
         XCTAssertEqual(result as? String, "done after 10ms")
     }
     
-    // MARK: - Host Tests
+    // MARK: - Service Center Tests
     
-    func testHostServiceRegistration() {
-        class AppService: NativeRPCService {
+    func testServiceCenterRegistration() {
+        class AppService: NativeRPCService, @unchecked Sendable {
+            override class var serviceName: String { "app" }
+            
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                Name("app")
+                // Empty definition - serviceName is used automatically
             }
         }
         
-        let host = NativeRPCHost()
-        let service = AppService()
+        // Register service type
+        NativeRPCServiceCenter.shared.register(AppService.self)
         
-        host.register(service)
+        // Check registration
+        let names = NativeRPCServiceCenter.shared.getRegisteredServiceNames()
+        XCTAssertTrue(names.contains("app"))
         
-        // Give time for async registration
-        let expectation = XCTestExpectation(description: "Service registered")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            let names = host.getServiceNames()
-            XCTAssertTrue(names.contains("app"))
-            
-            let info = host.getServiceInfo("app")
-            XCTAssertNotNil(info)
-            XCTAssertEqual(info?.name, "app")
-            
-            expectation.fulfill()
-        }
-        
-        wait(for: [expectation], timeout: 1.0)
+        // Clean up
+        NativeRPCServiceCenter.shared.unregister(name: "app")
     }
     
     // MARK: - Connection Tests
     
     func testCallbackConnection() {
-        var sentData: [Data] = []
+        var sentStrings: [String] = []
         
-        let connection = CallbackConnection { data in
-            sentData.append(data)
+        let connection = CallbackConnection(connectionType: .custom) { jsonString in
+            sentStrings.append(jsonString)
         }
         
         XCTAssertTrue(connection.isActive)
         
-        let testData = "test message".data(using: .utf8)!
-        connection.send(testData)
+        let testMessage = "test message"
+        connection.send(testMessage)
         
-        XCTAssertEqual(sentData.count, 1)
-        XCTAssertEqual(sentData.first, testData)
+        XCTAssertEqual(sentStrings.count, 1)
+        XCTAssertEqual(sentStrings.first, testMessage)
         
         connection.close()
         XCTAssertFalse(connection.isActive)
     }
     
     func testInMemoryConnectionPair() {
+        // In the new architecture, InMemoryConnectionPair connects two connections
+        // Messages are routed through stubs, not through simple callbacks
         let pair = InMemoryConnectionPair()
         
-        var clientReceived: [Data] = []
-        var serverReceived: [Data] = []
+        XCTAssertTrue(pair.client.isActive)
+        XCTAssertTrue(pair.server.isActive)
         
-        pair.client.onMessage = { data in
-            clientReceived.append(data)
-        }
-        
-        pair.server.onMessage = { data in
-            serverReceived.append(data)
-        }
-        
-        // Client sends to server
-        let clientMessage = "from client".data(using: .utf8)!
-        pair.client.send(clientMessage)
-        
-        XCTAssertEqual(serverReceived.count, 1)
-        XCTAssertEqual(serverReceived.first, clientMessage)
-        
-        // Server sends to client
-        let serverMessage = "from server".data(using: .utf8)!
-        pair.server.send(serverMessage)
-        
-        XCTAssertEqual(clientReceived.count, 1)
-        XCTAssertEqual(clientReceived.first, serverMessage)
+        // Test close
+        pair.close()
+        XCTAssertFalse(pair.client.isActive)
+        XCTAssertFalse(pair.server.isActive)
     }
     
     // MARK: - Message Encoding/Decoding Tests
@@ -226,10 +205,10 @@ final class NativeRPCKitTests: XCTestCase {
     
     func testPromiseResolve() async throws {
         class PromiseService: NativeRPCService {
+            override class var serviceName: String { "promise" }
+            
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                Name("promise")
-                
                 AsyncFunction("fetchData") { (id: String, promise: Promise) in
                     // Immediately resolve for test reliability
                     promise.resolve(["id": id, "name": "Test User"])
@@ -251,10 +230,10 @@ final class NativeRPCKitTests: XCTestCase {
     
     func testPromiseReject() async {
         class PromiseService: NativeRPCService {
+            override class var serviceName: String { "promise" }
+            
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                Name("promise")
-                
                 AsyncFunction("failingOp") { (promise: Promise) in
                     // Immediately reject for test reliability
                     promise.reject(code: -1, message: "Operation failed")
@@ -283,10 +262,10 @@ final class NativeRPCKitTests: XCTestCase {
     // Note: Queue tests simplified - actual queue validation is done in integration tests
     func testRunOnQueue() async throws {
         class QueueService: NativeRPCService {
+            override class var serviceName: String { "queue" }
+            
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                Name("queue")
-                
                 AsyncFunction("work") { () async -> String in
                     return "done"
                 }.runOnQueue(DispatchQueue.global())
@@ -300,10 +279,10 @@ final class NativeRPCKitTests: XCTestCase {
 
     func testRunOnMain() async throws {
         class MainActorService: NativeRPCService {
+            override class var serviceName: String { "main" }
+            
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                Name("main")
-                
                 AsyncFunction("work") { () async -> String in
                     // Just verify it runs without crashing
                     return "main thread work"
@@ -421,10 +400,10 @@ final class NativeRPCKitTests: XCTestCase {
     
     func testConvertibleInFunctionCall() async throws {
         class DateService: NativeRPCService {
+            override class var serviceName: String { "dates" }
+            
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                Name("dates")
-                
                 Function("formatDate") { (date: Date) -> String in
                     let formatter = DateFormatter()
                     formatter.dateFormat = "yyyy-MM-dd"
@@ -439,5 +418,65 @@ final class NativeRPCKitTests: XCTestCase {
         // Pass ISO8601 string, should be auto-converted to Date
         let result = try await service.handleCall(method: "formatDate", args: ["2024-01-15T10:30:00Z"])
         XCTAssertEqual(result as? String, "2024-01-15")
+    }
+    
+    // MARK: - Dictionary Parameter Extraction Tests
+    
+    func testDictionaryParameterExtraction() async throws {
+        class CounterService: NativeRPCService {
+            override class var serviceName: String { "counter" }
+            
+            private var count = 0
+            
+            @ServiceDefinitionBuilder
+            override func definition() -> ServiceDefinitionContainer {
+                Function("add") { (value: Int) -> Int in
+                    self.count += value
+                    return self.count
+                }
+                
+                Function("getValue") { () -> Int in
+                    self.count
+                }
+            }
+        }
+        
+        let service = CounterService()
+        
+        // Test with direct value (should work)
+        let result1 = try await service.handleCall(method: "add", args: [5])
+        XCTAssertEqual(result1 as? Int, 5)
+        
+        // Test with dictionary containing single value ({"value": 10})
+        // This simulates what Web/Flutter sends: {"value": 10}
+        let result2 = try await service.handleCall(method: "add", args: [["value": 10]])
+        XCTAssertEqual(result2 as? Int, 15)  // 5 + 10 = 15
+        
+        // Verify final count
+        let finalCount = try await service.handleCall(method: "getValue", args: [])
+        XCTAssertEqual(finalCount as? Int, 15)
+    }
+    
+    func testDictionaryParameterExtractionAsync() async throws {
+        class AsyncCounterService: NativeRPCService {
+            override class var serviceName: String { "asyncCounter" }
+            
+            private var count = 0
+            
+            @ServiceDefinitionBuilder
+            override func definition() -> ServiceDefinitionContainer {
+                AsyncFunction("addDelayed") { (value: Int) async -> Int in
+                    try? await Task.sleep(nanoseconds: 1_000_000) // 1ms
+                    self.count += value
+                    return self.count
+                }
+            }
+        }
+        
+        let service = AsyncCounterService()
+        
+        // Test with dictionary containing single value
+        let result = try await service.handleCall(method: "addDelayed", args: [["value": 7]])
+        XCTAssertEqual(result as? Int, 7)
     }
 }

@@ -10,6 +10,53 @@ This is a **connection-agnostic SDK** with **zero Flutter dependencies**. It can
 - Flutter apps (via `native_rpc_flutter` plugin)
 - Any project that implements `NativeRPCConnection` interface
 
+## Architecture (v2.1)
+
+NativeRPC v2.1 uses a **factory-based, per-connection architecture**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   NativeRPCServiceCenter                    │
+│                   (Global Singleton)                        │
+│   Stores: Map<ServiceName, NativeRPCServiceFactory>         │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              │ getFactory(name)
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    NativeRPCConnection                      │
+│                    (Per Client/WebView)                     │
+│  ┌────────────────┐  ┌─────────────────────────────────────┐│
+│  │ NativeRPCContext│  │         NativeRPCStub              ││
+│  │ - connectionId  │  │ - Instantiates services lazily     ││
+│  │ - connectionType│  │ - Routes calls to service instances ││
+│  │ - userInfo      │  │ - Manages service lifecycle        ││
+│  └────────────────┘  └─────────────────────────────────────┘│
+│                              │                              │
+│                  ┌───────────┴───────────┐                  │
+│                  ▼                       ▼                  │
+│           ┌──────────┐            ┌──────────┐              │
+│           │ Service  │            │ Service  │              │
+│           │ Instance │            │ Instance │              │
+│           └──────────┘            └──────────┘              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Concepts
+
+1. **NativeRPCServiceCenter** - Global singleton storing service **factories** (not instances)
+2. **NativeRPCConnection** - Base class for connections, auto-creates context + stub
+3. **NativeRPCStub** - Per-connection message handler, lazily creates service instances
+4. **NativeRPCContext** - Per-connection context with connection info and shared storage
+5. **NativeRPCService** - Base class for services, must define a Factory companion object
+
+### Benefits
+
+- **Isolation**: Each connection gets its own service instances
+- **State**: Services can maintain per-connection state
+- **Cleanup**: Service instances are destroyed when connection closes
+- **Scalability**: Supports multiple concurrent connections (WebViews, Flutter engines)
+
 ## Protocol
 
 NativeRPC uses a **simplified JSON-RPC 2.0** protocol:
@@ -26,30 +73,6 @@ NativeRPC uses a **simplified JSON-RPC 2.0** protocol:
 
 // Outgoing Notification (event)
 {"method": "counter.countChanged", "params": {"count": 42}}
-```
-
-## Protocol Communication
-
-All messages are JSON strings following the simplified JSON-RPC 2.0 protocol:
-
-**Incoming Call**:
-```json
-{"id": "uuid", "method": "myservice.hello", "params": ["World"]}
-```
-
-**Outgoing Result**:
-```json
-{"id": "uuid", "result": "Hello, World!"}
-```
-
-**Outgoing Error**:
-```json
-{"id": "uuid", "error": {"code": -32601, "message": "Method not found"}}
-```
-
-**Outgoing Notification (Event)**:
-```json
-{"method": "myservice.someEvent", "params": {...}}
 ```
 
 ## Error Codes
@@ -70,77 +93,122 @@ All messages are JSON strings following the simplified JSON-RPC 2.0 protocol:
 ## What Lives Here
 
 ### src/main/kotlin/com/itoken/team/nativerpc/
-- **core/**: `NativeRPCHost`, `NativeRPCService`, `NativeRPCMessage`, `NativeRPCError`
-  - Host manages services and connections
-  - Services are defined using Kotlin DSL
-  - Message/Error handle protocol communication
-- **dsl/**: `ServiceDefinitionBuilder`, `ServiceDefinition`
-  - Kotlin DSL with `serviceDefinition { }` builder
-  - Declarative syntax for defining service APIs
-- **connection/**: `NativeRPCConnection` interface
-  - Abstract interface for any transport (MethodChannel, WebSocket, etc.)
-  - Implement this interface to add custom connections
+
+- **core/**
+  - `NativeRPCServiceCenter.kt` - Global service factory registry
+  - `NativeRPCStub.kt` - Per-connection message router
+  - `NativeRPCContext.kt` - Per-connection context
+  - `NativeRPCService.kt` - Base class for services
+  - `NativeRPCMessage.kt` - JSON-RPC message types
+  - `NativeRPCError.kt` - Error types and codes
+- **dsl/**
+  - `ServiceDefinitionBuilder.kt` - Kotlin DSL builder
+  - `ServiceDefinition.kt` - Function/event definitions
+- **connection/**
+  - `NativeRPCConnection.kt` - Base class for connections
+  - `FlutterMethodChannelConnection.kt` - Flutter MethodChannel implementation
+  - `WebViewConnection.kt` - Android WebView implementation
 
 ### src/test/kotlin/
 - Kotlin unit tests
 
-## Gradle Structure
-
-This is a standard Kotlin library project with Gradle:
-
-```kotlin
-// build.gradle.kts
-plugins {
-    kotlin("jvm")
-}
-```
-
 ## Usage Examples
 
-### Standalone Kotlin App (No Flutter)
+### 1. Define a Service with Factory
 
 ```kotlin
 import com.itoken.team.nativerpc.core.*
 import com.itoken.team.nativerpc.dsl.*
-import com.itoken.team.nativerpc.connection.*
 
-// 1. Define your service
-class MyService : NativeRPCService() {
-    override fun definition() = serviceDefinition {
-        Name("myservice")
-        Function1<String, String>("hello") { name ->
-            "Hello, $name!"
+class CounterService(context: NativeRPCContext? = null) : NativeRPCService() {
+    
+    // Factory for per-connection instantiation
+    companion object {
+        val Factory = object : NativeRPCServiceFactory<CounterService> {
+            override val serviceName = "counter"
+            override fun create(context: NativeRPCContext?) = CounterService(context)
         }
     }
-}
-
-// 2. Implement custom connection (e.g., WebSocket)
-class MyConnection : NativeRPCConnection() {
-    override fun send(message: String) {
-        // Send JSON over your transport
+    
+    private var count = 0
+    
+    override fun definition() = serviceDefinition {
+        // Note: Name() is no longer needed - serviceName from Factory is used automatically
+        
+        Function0<Int>("getValue") { count }
+        
+        Function0<Int>("increment") {
+            count++
+            emit("countChanged", mapOf("count" to count))
+            count
+        }
+        
+        Events("countChanged")
     }
-    // Call onMessage() when receiving data
 }
-
-// 3. Setup host
-val host = NativeRPCHost()
-host.register(MyService())
-host.addConnection(MyConnection())
 ```
 
-### With Flutter (via Plugin)
-
-The `native_rpc_flutter` plugin provides `FlutterMethodChannelConnection`:
+### 2. Register Services at App Startup
 
 ```kotlin
-import com.itoken.team.nativerpc.core.*
+import com.itoken.team.nativerpc.core.NativeRPCServiceCenter
 
-// In MainActivity.kt
-val host = NativeRPCHost()
-host.register(MyService())
+// In Application.onCreate() or MainActivity
+NativeRPCServiceCenter.register(CounterService.Factory)
+NativeRPCServiceCenter.register(UserService.Factory)
 
-val connection = FlutterMethodChannelConnection(channelName = "native_rpc")
-host.addConnection(connection)
+// Alternative: Lambda factory
+NativeRPCServiceCenter.register("counter") { context ->
+    CounterService(context)
+}
+```
+
+### 3. Create Connections
+
+#### With Flutter (via MethodChannel)
+
+```kotlin
+import com.itoken.team.nativerpc.connection.FlutterMethodChannelConnection
+import io.flutter.plugin.common.MethodChannel
+
+// In MainActivity.configureFlutterEngine()
+val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "native_rpc")
+val connection = FlutterMethodChannelConnection(channel, activity)
+
+// Connection auto-starts and is ready to handle calls
+// Services are created on-demand when first called
+```
+
+#### With WebView
+
+```kotlin
+import com.itoken.team.nativerpc.webview.WebViewNativeRPCBridge
+
+// Create bridge for your WebView
+val bridge = WebViewNativeRPCBridge(activity)
+bridge.attach(webView)
+
+// When done
+bridge.detach()
+```
+
+### 4. Custom Connection
+
+```kotlin
+class MyWebSocketConnection(
+    private val socket: WebSocket
+) : NativeRPCConnection(
+    connectionType = NativeRPCConnectionType.WEB_SOCKET
+) {
+    override fun send(data: String) {
+        socket.send(data)
+    }
+    
+    // Call handleReceivedData() when data arrives
+    fun onMessageReceived(message: String) {
+        handleReceivedData(message)
+    }
+}
 ```
 
 ## Build and Test
@@ -157,73 +225,143 @@ host.addConnection(connection)
 ./gradlew test
 ```
 
-### Use in Flutter Plugin
-
-This SDK is integrated into the Flutter plugin at:
-`../../connections/flutter/native_rpc_flutter/android/`
-
-The plugin's `build.gradle` depends on this SDK.
-
 ## Key Classes
 
-### NativeRPCHost
-- Central registry for services
-- Manages multiple connections
-- Routes messages to appropriate services
+### NativeRPCServiceCenter
+- Global singleton storing service factories
+- Thread-safe with read-write lock
+- `register(factory)` - Register a service factory
+- `register(name) { context -> Service(context) }` - Lambda registration
+- `getRegisteredServiceNames()` - List registered services
+- `reset()` - Clear all registrations (for testing)
 
 ### NativeRPCService
 - Base class for all services
 - Override `definition()` to define service API using DSL
-- Call `emit(event, data)` to send events to clients
+- Add `Factory` companion object for registration
+- Call `emit(event, data)` to send events
+- Access `context` for connection-scoped state
 
-### NativeRPCConnection (Interface)
-- `fun send(message: String)` - Send JSON message
-- `fun onMessage(message: String)` - Process incoming message
-- Implement this to add custom transports
+### NativeRPCServiceFactory
+- Interface for creating service instances
+- `serviceName` - Unique service identifier
+- `supportedConnectionTypes` - Connection types this service supports
+- `create(context)` - Create new instance with context
 
-### NativeRPCMessage
-- `NativeRPCRequest` - Parsed request with `service` and `methodName` properties
-- `NativeRPCResponse` - Success response `{"id", "result"}`
-- `NativeRPCErrorResponse` - Error response `{"id", "error"}`
-- `NativeRPCNotification` - Event notification `{"method", "params"}`
-- `NativeRPCIncomingMessage` - Sealed class for parsed incoming messages
+### NativeRPCConnection
+- Base class for all connections
+- Auto-creates `NativeRPCContext` and `NativeRPCStub`
+- Override `send(data)` to send JSON messages
+- Call `handleReceivedData(data)` when data arrives
+- Call `close()` to clean up
 
-### NativeRPCError
-- `NativeRPCErrorCode` - Standard JSON-RPC 2.0 error codes (-32700 to -32603)
-- Custom error codes for service/event not found, timeout, connection error
+### NativeRPCStub
+- Per-connection message router
+- Lazily instantiates services on first call
+- Routes calls to appropriate service methods
+- Handles event delivery
+- Destroys services on connection close
+
+### NativeRPCContext
+- Per-connection context
+- `connectionId` - Unique connection identifier
+- `connectionType` - FLUTTER, WEB_VIEW, WEB_SOCKET, etc.
+- `userInfo` - Mutable dictionary for custom data
+- `activity` - Optional Android Activity reference
 
 ### ServiceDefinitionBuilder (DSL)
 - Kotlin DSL for declaratively defining services
-- Elements: `Name()`, `Function0/1/2()`, `Events()`, `Constant()`
+- `Name("serviceName")` - Set service name (deprecated, auto-set from Factory.serviceName)
+- `Function0/1/2<...>("name") { }` - Define methods
+- `AsyncFunction0/1/2<...>("name") { }` - Define async methods
+- `Events("event1", "event2")` - Declare events
+- `Constant("name") { value }` - Define constants
 
-## Making Changes
+## Migration from v2.0 (NativeRPCHost)
 
-1. Edit Kotlin files in `src/main/kotlin/com/itoken/team/nativerpc/`
-2. Run tests: `./gradlew test`
-3. Test standalone usage in a Kotlin project
-4. Test Flutter integration in `connections/flutter/native_rpc_flutter/example/`
-5. Update this AGENTS.md if architecture changes
+If you're migrating from the old `NativeRPCHost` architecture:
+
+### Before (v2.0)
+
+```kotlin
+// ❌ Old pattern - shared service instances
+val host = NativeRPCHost()
+host.register(CounterService())  // Instance, not factory
+host.addConnection(connection)
+```
+
+### After (v2.1)
+
+```kotlin
+// ✅ New pattern - per-connection service instances
+// 1. Add Factory to your service class
+class CounterService(context: NativeRPCContext? = null) : NativeRPCService() {
+    companion object {
+        val Factory = object : NativeRPCServiceFactory<CounterService> {
+            override val serviceName = "counter"
+            override fun create(context: NativeRPCContext?) = CounterService(context)
+        }
+    }
+    // ...
+}
+
+// 2. Register factory at startup
+NativeRPCServiceCenter.register(CounterService.Factory)
+
+// 3. Create connection (no host needed)
+val connection = FlutterMethodChannelConnection(channel, activity)
+```
 
 ## Design Philosophy
 
 - **No Flutter Dependencies**: Pure Kotlin, can run anywhere (Android, JVM)
 - **Protocol-Agnostic**: Connection layer is pluggable
+- **Per-Connection Isolation**: Each connection gets its own service instances
+- **Factory Pattern**: Services are created on-demand with context
 - **Type-Safe**: Kotlin's type system enforces correctness
 - **Declarative**: DSL makes service definition clear and idiomatic
 
-## Kotlin DSL Design
+## Code Generation
 
-The DSL uses function types to define methods with different arities:
+Services can be generated from TypeScript interface definitions using the NativeRPC code generator:
 
-```kotlin
-Function0<ReturnType>("methodName") { /* no args */ }
-Function1<Arg1, ReturnType>("methodName") { arg1 -> /* ... */ }
-Function2<Arg1, Arg2, ReturnType>("methodName") { arg1, arg2 -> /* ... */ }
+```bash
+cd codegen
+npm run generate -- generate --config examples/config.json --kotlin
 ```
 
-This provides type safety while maintaining a clean, declarative syntax.
+Generated services include:
+- Factory companion object for registration
+- `init` block to set context
+- `definition()` using `serviceDefinition` DSL
+- Type-safe event emitter methods
+
+Example generated structure:
+
+```kotlin
+class CounterRPCService(context: NativeRPCContext? = null) : NativeRPCService() {
+    companion object {
+        val Factory = object : NativeRPCServiceFactory<CounterRPCService> {
+            override val serviceName = "counter"
+            override fun create(context: NativeRPCContext?) = CounterRPCService(context)
+        }
+    }
+
+    init { this.internalContext = context }
+
+    override fun definition() = serviceDefinition {
+        // Name is auto-set from Factory.serviceName
+        Function("getValue") { -> /* TODO */ }
+        Events("countChanged")
+    }
+}
+```
+
+See `../../codegen/AGENTS.md` for code generator documentation.
 
 ## Related Documentation
 
 - Main README: `../../README.md`
+- Code Generator: `../../codegen/`
 - Flutter Plugin: `../../connections/flutter/native_rpc_flutter/`
+- iOS SDK: `../../sdk/ios/`

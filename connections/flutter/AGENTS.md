@@ -2,26 +2,70 @@
 
 This folder contains the Flutter connection implementation for NativeRPC.
 
+## Architecture (v2.1)
+
+The Flutter plugin now uses the **NativeRPC Android/iOS SDK** as a dependency:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   Flutter App (Dart)                        │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │              native_rpc_flutter plugin                 │ │
+│  │  - NativeRPC.call('service.method')                    │ │
+│  │  - NativeRPC.on('service.event', callback)             │ │
+│  └────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                    MethodChannel (JSON-RPC)
+                              │
+┌─────────────────────────────────────────────────────────────┐
+│                      Native Platform                        │
+│  ┌────────────────────────────────────────────────────────┐ │
+│  │              NativeRPC SDK (Android/iOS)               │ │
+│  │  - NativeRPCServiceCenter (global factory registry)    │ │
+│  │  - FlutterMethodChannelConnection (per-engine)         │ │
+│  │  - NativeRPCStub (per-connection service router)       │ │
+│  └────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ## Structure
 
 ```
 flutter/
-└── native_rpc_flutter/           # Single Flutter plugin package
+└── native_rpc_flutter/           # Flutter plugin package
     ├── lib/
     │   ├── native_rpc_flutter.dart     # Package export
     │   └── src/
-    │       ├── native_rpc.dart         # Simple singleton API (NativeRPC.call, NativeRPC.on)
+    │       ├── native_rpc.dart         # Simple singleton API
     │       ├── runtime/
-    │       │   ├── native_rpc_client.dart    # Advanced client with full control
-    │       │   ├── native_rpc_message.dart   # Message models & error codes
+    │       │   ├── native_rpc_message.dart   # Message models
     │       │   └── native_rpc_connection.dart # Connection interface
     │       └── connection/
-    │           └── method_channel_connection.dart  # MethodChannel implementation
+    │           └── method_channel_connection.dart  # MethodChannel impl
+    │
     ├── ios/Classes/
-    │   └── FlutterMethodChannelConnection.swift    # iOS MethodChannel handler
+    │   ├── NativeRpcPlugin.swift               # Plugin registration
+    │   └── FlutterMethodChannelConnection.swift # MethodChannel handler
+    │
     └── android/
-        └── src/.../NativeRpcFlutterPlugin.kt       # Android MethodChannel handler
+        └── src/main/kotlin/.../
+            └── NativeRpcPlugin.kt              # Plugin registration
+                                                # (Uses SDK's FlutterMethodChannelConnection)
 ```
+
+## Key Changes in v2.1
+
+### Android
+
+- **Removed** duplicate core files (NativeRPCService.kt, NativeRPCHost.kt, etc.)
+- **Now uses** Android SDK as source dependency
+- **NativeRpcPlugin** provides convenience methods that delegate to SDK
+
+### iOS
+
+- **Uses** NativeRPCKit SDK
+- **NativeRpcPlugin** provides convenience methods for service registration
 
 ## Protocol
 
@@ -41,7 +85,7 @@ Uses simplified JSON-RPC 2.0 format:
 
 ## Usage
 
-### Simple API (Recommended)
+### Dart Side (Flutter)
 
 ```dart
 import 'package:native_rpc_flutter/native_rpc_flutter.dart';
@@ -63,30 +107,98 @@ NativeRPC.on('counter.countChanged', onCountChanged);
 NativeRPC.off('counter.countChanged', onCountChanged);
 ```
 
-### Advanced API
+### Native Side (Android - Kotlin)
 
-```dart
-import 'package:native_rpc_flutter/native_rpc_flutter.dart';
+```kotlin
+import com.itoken.team.nativerpc.core.*
+import com.itoken.team.nativerpc.dsl.serviceDefinition
 
-// Create custom client
-final client = NativeRPCClient(MethodChannelConnection());
-
-// Call with full response
-final response = await client.call(
-  NativeRPCRequest(id: '1', method: 'counter.increment', params: {}),
-);
-
-if (response.hasError) {
-  print('Error: ${response.error!.message}');
-} else {
-  print('Result: ${response.result}');
+// 1. Define service with Factory
+class CounterService(context: NativeRPCContext? = null) : NativeRPCService() {
+    
+    companion object {
+        val Factory = object : NativeRPCServiceFactory<CounterService> {
+            override val serviceName = "counter"
+            override fun create(context: NativeRPCContext?) = CounterService(context)
+        }
+    }
+    
+    init { this.internalContext = context }
+    
+    private var count = 0
+    
+    override fun definition() = serviceDefinition {
+        // Note: Name is auto-set from Factory.serviceName
+        
+        Function("getValue") { -> count }
+        
+        Function("increment") { ->
+            count++
+            emit("countChanged", mapOf("count" to count))
+            count
+        }
+        
+        Events("countChanged")
+    }
 }
 
-// Listen to events
-client.events.listen((event) {
-  print('Event: ${event.method} - ${event.params}');
-});
+// 2. Register at startup (in Application.onCreate or MainActivity)
+NativeRPCServiceCenter.register(CounterService.Factory)
+
+// 3. Create connection in MainActivity.configureFlutterEngine()
+val channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "native_rpc")
+val connection = FlutterMethodChannelConnection(channel, activity)
 ```
+
+### Native Side (iOS - Swift)
+
+```swift
+import NativeRPCKit
+
+// 1. Define service (NativeRPCService already conforms to NativeRPCServiceRegistrable)
+final class CounterService: NativeRPCService {
+    override class var serviceName: String { "counter" }
+    
+    private var count = 0
+    
+    required init(context: NativeRPCContext?) {
+        super.init(context: context)
+    }
+    
+    @ServiceDefinitionBuilder
+    override func definition() -> ServiceDefinitionContainer {
+        // Note: Name is auto-set from serviceName class property
+        
+        Function("getValue") { () -> Int in
+            self.count
+        }
+        
+        Function("increment") { () -> Int in
+            self.count += 1
+            self.emit("countChanged", data: ["count": self.count])
+            return self.count
+        }
+        
+        Events("countChanged")
+    }
+}
+
+// 2. Register at startup (e.g., in AppDelegate)
+NativeRPCServiceCenter.shared.register(CounterService.self)
+
+// 3. Connection is created automatically by plugin
+```
+
+## Code Generation
+
+Services can be generated from TypeScript interface definitions:
+
+```bash
+cd codegen
+npm run generate -- generate --config examples/config.json
+```
+
+See `../../codegen/AGENTS.md` for code generator documentation.
 
 ## Error Codes
 
@@ -99,21 +211,36 @@ client.events.listen((event) {
 | -32603 | internalError | Internal error |
 | -32001 | serviceNotFound | Service doesn't exist |
 | -32002 | eventNotFound | Event doesn't exist |
-| -32003 | timeout | Request timed out |
-| -32004 | connectionError | Connection failed |
-| -32005 | unknown | Unknown error |
+| -32003 | eventNotDeclared | Event not in service definition |
+| -32004 | timeout | Request timed out |
+| -32005 | connectionError | Connection failed |
 
-## iOS Integration
+## Android SDK Integration
 
-The iOS side (`ios/Classes/FlutterMethodChannelConnection.swift`) handles:
-1. Receiving MethodChannel calls from Flutter
-2. Forwarding to `NativeRPCHost` for processing
-3. Sending responses back via MethodChannel result
-4. Pushing events to Flutter via `invokeMethod("notification", ...)`
+The Android side of the plugin uses the SDK as a source dependency:
 
-## Android Integration
+```groovy
+// settings.gradle
+def sdkPath = file("${rootProject.projectDir}/../../../../../../sdk/android")
+if (sdkPath.exists()) {
+    include ':nativerpc-sdk'
+    project(':nativerpc-sdk').projectDir = sdkPath
+}
 
-The Android side (`android/...`) provides the same functionality in Kotlin.
+// build.gradle
+dependencies {
+    implementation project(':nativerpc-sdk')
+}
+```
+
+## iOS SDK Integration
+
+The iOS side uses NativeRPCKit via CocoaPods:
+
+```ruby
+# native_rpc_flutter.podspec
+s.dependency 'NativeRPCKit'
+```
 
 ## Development Commands
 
@@ -132,8 +259,34 @@ cd example
 flutter run
 ```
 
+## Migration from v2.0
+
+If you previously used `NativeRPCHost`:
+
+### Before (v2.0)
+
+```kotlin
+// ❌ Old pattern
+val host = NativeRPCHost()
+host.register(CounterService())  // Instance
+host.addConnection(connection)
+```
+
+### After (v2.1)
+
+```kotlin
+// ✅ New pattern
+// 1. Add Factory to service
+// 2. Register factory at startup
+NativeRPCServiceCenter.register(CounterService.Factory)
+// 3. Create connection (no host needed)
+val connection = FlutterMethodChannelConnection(channel, activity)
+```
+
 ## Related Files
 
+- Android SDK: `../../sdk/android/`
 - iOS SDK: `../../sdk/ios/`
+- Code Generator: `../../codegen/`
 - Example app: `../../examples/flutter_counter/`
 - Main README: `../../README.md`

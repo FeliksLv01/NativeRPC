@@ -1,0 +1,403 @@
+// NativeRPCStub.swift
+// NativeRPC v2
+//
+// Per-connection message handler that manages service instances.
+// Each connection has its own Stub, which lazily creates and holds service instances.
+
+import Foundation
+
+// MARK: - Stub Delegate Protocol
+
+/// Protocol for receiving outgoing messages from the stub
+public protocol NativeRPCStubDelegate: AnyObject {
+    /// Send a JSON message string to the client
+    func sendMessage(_ jsonString: String)
+}
+
+// MARK: - NativeRPCStub
+
+/// Per-connection message handler that manages service instances.
+///
+/// Each connection has its own `NativeRPCStub`, which:
+/// - Lazily creates service instances when first called
+/// - Routes incoming RPC messages to the appropriate service
+/// - Manages event subscriptions for this connection
+/// - Destroys all service instances when the connection closes
+///
+/// Usage:
+/// ```swift
+/// let context = NativeRPCContext(connection: connection, connectionType: .flutter)
+/// let stub = NativeRPCStub(context: context)
+/// stub.delegate = connection
+///
+/// // When receiving a message from client:
+/// stub.handleIncomingMessage(data)
+///
+/// // When connection closes:
+/// stub.shutdown()
+/// ```
+///
+/// Note: Marked `@unchecked Sendable` because mutable state (`services`, `subscriptions`)
+/// is protected by the internal `queue` (concurrent DispatchQueue with barrier writes).
+/// Safety invariant: All mutations use `.barrier` flag, reads use `queue.sync`.
+public final class NativeRPCStub: @unchecked Sendable {
+    
+    // MARK: - Properties
+    
+    /// The context for this connection (contains connection info and shared storage)
+    public let context: NativeRPCContext
+    
+    /// Delegate to send outgoing messages
+    public weak var delegate: NativeRPCStubDelegate?
+    
+    /// Instantiated services for this connection, keyed by service name
+    private var services: [String: NativeRPCService] = [:]
+    
+    /// Event subscriptions for this connection: [eventFullName: referenceCount]
+    /// where eventFullName = "service.event"
+    private var subscriptions: [String: Int] = [:]
+    
+    /// Serial queue for thread-safe operations
+    private let queue = DispatchQueue(label: "com.nativerpc.stub", attributes: .concurrent)
+    
+    /// JSON encoder for messages
+    private let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return encoder
+    }()
+    
+    // MARK: - Initialization
+    
+    /// Create a new stub for a connection
+    ///
+    /// - Parameter context: The context for this connection
+    public init(context: NativeRPCContext) {
+        self.context = context
+    }
+    
+    // MARK: - Service Access
+    
+    /// Get or create a service instance for this connection
+    ///
+    /// Services are lazily instantiated on first access and cached for the
+    /// lifetime of the connection.
+    ///
+    /// - Parameter name: The service name
+    /// - Returns: The service instance
+    /// - Throws: `NativeRPCError` if service not found or connection type not supported
+    public func service(named name: String) throws -> NativeRPCService {
+        // Check if service is already instantiated
+        var existingService: NativeRPCService?
+        queue.sync {
+            existingService = services[name]
+        }
+        if let service = existingService {
+            return service
+        }
+        
+        // Get the service type from the service center
+        guard let serviceType = NativeRPCServiceCenter.shared.serviceType(named: name) else {
+            throw NativeRPCError.serviceNotFound(name)
+        }
+        
+        // Check if service supports this connection type
+        guard NativeRPCServiceCenter.shared.supportsConnectionType(
+            serviceName: name,
+            connectionType: context.connectionType
+        ) else {
+            throw NativeRPCError.connectionTypeNotSupported(
+                service: name,
+                connectionType: context.connectionTypeDescription
+            )
+        }
+        
+        // Create the service instance
+        var newService: NativeRPCService?
+        queue.sync(flags: .barrier) {
+            // Double-check in case another thread created it
+            if let existing = services[name] {
+                newService = existing
+                return
+            }
+            
+            // Create new instance
+            let instance = serviceType.init(context: context)
+            if let service = instance as? NativeRPCService {
+                service.stub = self
+                services[name] = service
+                newService = service
+                print("[NativeRPC] Created service instance: \(name)")
+            }
+        }
+        
+        guard let service = newService else {
+            throw NativeRPCError.internalError("Failed to create service instance: \(name)")
+        }
+        
+        return service
+    }
+    
+    // MARK: - Message Handling
+    
+    /// Handle an incoming message from the client
+    ///
+    /// - Parameter data: The raw JSON message data
+    public func handleIncomingMessage(_ data: Data) {
+        Task {
+            do {
+                let message = try NativeRPCMessageParser.parse(data)
+                
+                switch message {
+                case .call(let request):
+                    await handleCallRequest(request)
+                    
+                case .subscribe(let request):
+                    handleSubscribe(request)
+                    
+                case .unsubscribe(let request):
+                    handleUnsubscribe(request)
+                }
+            } catch let error as NativeRPCError {
+                sendError(id: "unknown", error: error)
+            } catch {
+                let rpcError = NativeRPCError.parseError(error.localizedDescription)
+                sendError(id: "unknown", error: rpcError)
+            }
+        }
+    }
+    
+    /// Handle a call request
+    private func handleCallRequest(_ request: NativeRPCRequest) async {
+        let serviceName = request.service
+        let methodName = request.methodName
+        
+        // Get the service (creates if needed)
+        let service: NativeRPCService
+        do {
+            service = try self.service(named: serviceName)
+        } catch let error as NativeRPCError {
+            sendError(id: request.id, error: error)
+            return
+        } catch {
+            sendError(id: request.id, error: NativeRPCError.internalError(error.localizedDescription))
+            return
+        }
+        
+        // Check if method exists
+        guard service.canHandle(method: methodName) else {
+            let error = NativeRPCError.methodNotFound(methodName, service: serviceName)
+            sendError(id: request.id, error: error)
+            return
+        }
+        
+        // Get params
+        let params = request.params
+        
+        do {
+            // Call the method
+            let result = try await service.handleCall(method: methodName, params: params)
+            
+            // Send success response
+            let response = NativeRPCResponse(id: request.id, result: result)
+            sendResponse(response)
+        } catch let error as NativeRPCError {
+            sendError(id: request.id, error: error)
+        } catch {
+            let rpcError = NativeRPCError.internalError(error.localizedDescription)
+            sendError(id: request.id, error: rpcError)
+        }
+    }
+    
+    /// Handle a subscribe request
+    private func handleSubscribe(_ request: NativeRPCSubscribeRequest) {
+        let serviceName = request.service
+        let eventName = request.eventName
+        let eventFullName = request.event
+        
+        // Get the service (creates if needed)
+        let service: NativeRPCService
+        do {
+            service = try self.service(named: serviceName)
+        } catch let error as NativeRPCError {
+            sendError(id: request.id, error: error)
+            return
+        } catch {
+            sendError(id: request.id, error: NativeRPCError.internalError(error.localizedDescription))
+            return
+        }
+        
+        // Validate event is declared
+        guard service.definitionContainer.hasEvent(eventName) else {
+            let error = NativeRPCError.eventNotDeclared(eventName, service: serviceName)
+            sendError(id: request.id, error: error)
+            return
+        }
+        
+        queue.async(flags: .barrier) { [weak self] in
+            guard let self = self else { return }
+            
+            // Increment subscription count
+            let currentCount = self.subscriptions[eventFullName] ?? 0
+            let isFirstSubscriber = currentCount == 0
+            self.subscriptions[eventFullName] = currentCount + 1
+            
+            // Notify service if this is the first subscriber
+            if isFirstSubscriber {
+                service.onStartObserving(event: eventName)
+            }
+            
+            // Send success response
+            let response = NativeRPCResponse(id: request.id, result: true)
+            self.sendResponse(response)
+        }
+    }
+    
+    /// Handle an unsubscribe request
+    private func handleUnsubscribe(_ request: NativeRPCUnsubscribeRequest) {
+        let serviceName = request.service
+        let eventName = request.eventName
+        let eventFullName = request.event
+        
+        queue.async(flags: .barrier) { [weak self] in
+            guard let self = self else { return }
+            
+            // Decrement subscription count
+            let currentCount = self.subscriptions[eventFullName] ?? 0
+            let newCount = max(0, currentCount - 1)
+            self.subscriptions[eventFullName] = newCount
+            
+            let noMoreSubscribers = newCount == 0
+            
+            // Notify service if no more subscribers
+            if noMoreSubscribers, let service = self.services[serviceName] {
+                service.onStopObserving(event: eventName)
+            }
+            
+            // Send success response
+            let response = NativeRPCResponse(id: request.id, result: true)
+            self.sendResponse(response)
+        }
+    }
+    
+    // MARK: - Event Sending
+    
+    /// Send an event notification to the client
+    ///
+    /// This is called by services via `NativeRPCService.emit()`.
+    /// The event is only sent if the client has subscribed to it.
+    ///
+    /// - Parameter notification: The event notification to send
+    public func sendEvent(_ notification: NativeRPCNotification) {
+        queue.async { [weak self] in
+            guard let self = self else { return }
+            
+            let eventFullName = notification.method
+            
+            // Check if client is subscribed to this event
+            guard let count = self.subscriptions[eventFullName], count > 0 else {
+                return
+            }
+            
+            // Encode and send
+            guard let data = try? self.encoder.encode(notification),
+                  let jsonString = String(data: data, encoding: .utf8) else {
+                print("[NativeRPC] Failed to encode notification: \(eventFullName)")
+                return
+            }
+            
+            self.delegate?.sendMessage(jsonString)
+        }
+    }
+    
+    /// Convenience method to send event with service, event name, and params
+    public func sendEvent(service: String, event: String, params: Any? = nil) {
+        let notification = NativeRPCNotification(service: service, event: event, params: params)
+        sendEvent(notification)
+    }
+    
+    // MARK: - Response Helpers
+    
+    private func sendResponse(_ response: NativeRPCResponse) {
+        guard let data = try? encoder.encode(response),
+              let jsonString = String(data: data, encoding: .utf8) else {
+            print("[NativeRPC] Failed to encode response")
+            return
+        }
+        delegate?.sendMessage(jsonString)
+    }
+    
+    private func sendError(id: String, error: NativeRPCError) {
+        let response = NativeRPCErrorResponse(id: id, error: error)
+        guard let data = try? encoder.encode(response),
+              let jsonString = String(data: data, encoding: .utf8) else {
+            print("[NativeRPC] Failed to encode error response")
+            return
+        }
+        delegate?.sendMessage(jsonString)
+    }
+    
+    // MARK: - Lifecycle
+    
+    /// Notify all services that app entered foreground
+    public func onAppForeground() {
+        queue.sync {
+            for service in services.values {
+                service.onForeground()
+            }
+        }
+    }
+    
+    /// Notify all services that app entered background
+    public func onAppBackground() {
+        queue.sync {
+            for service in services.values {
+                service.onBackground()
+            }
+        }
+    }
+    
+    /// Shutdown the stub and destroy all service instances
+    ///
+    /// Call this when the connection closes.
+    public func shutdown() {
+        queue.async(flags: .barrier) { [weak self] in
+            guard let self = self else { return }
+            
+            // Destroy all services
+            for (name, service) in self.services {
+                service.destroy()
+                print("[NativeRPC] Destroyed service: \(name)")
+            }
+            self.services.removeAll()
+            
+            // Clear subscriptions
+            self.subscriptions.removeAll()
+            
+            // Clear context storage
+            self.context.clearStorage()
+            
+            print("[NativeRPC] Stub shutdown complete")
+        }
+    }
+    
+    // MARK: - Introspection
+    
+    /// Get list of instantiated service names for this connection
+    public func getActiveServiceNames() -> [String] {
+        var result: [String] = []
+        queue.sync {
+            result = Array(services.keys)
+        }
+        return result.sorted()
+    }
+    
+    /// Get list of active subscriptions for this connection
+    public func getActiveSubscriptions() -> [String] {
+        var result: [String] = []
+        queue.sync {
+            result = subscriptions.filter { $0.value > 0 }.map { $0.key }
+        }
+        return result.sorted()
+    }
+}

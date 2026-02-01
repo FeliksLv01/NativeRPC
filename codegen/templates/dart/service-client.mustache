@@ -3,7 +3,6 @@
 // Source: {{sourceFile}}
 // Generated at: {{timestamp}}
 
-import 'dart:async';
 import 'package:native_rpc_flutter/native_rpc_flutter.dart';
 
 {{#customTypes}}
@@ -21,10 +20,6 @@ import 'package:native_rpc_flutter/native_rpc_flutter.dart';
 {{/documentationLines}}
 {{/hasDocumentation}}
 class {{className}} {
-  final NativeRPCConnection _connection;
-
-  {{className}}(this._connection);
-
   // ============================================================================
   // Methods
   // ============================================================================
@@ -35,17 +30,17 @@ class {{className}} {
   /// {{{line}}}
   {{/documentationLines}}
   {{/hasDocumentation}}
-  Future<{{returnType}}> {{methodName}}({{#hasParams}}{ {{#parameters}}{{#optional}}{{type}}? {{name}}{{/optional}}{{^optional}}required {{type}} {{name}}{{/optional}}{{^last}}, {{/last}}{{/parameters}} }{{/hasParams}}) async {
+  static Future<{{returnType}}> {{methodName}}({{#hasParams}}{ {{#parameters}}{{#optional}}{{type}}? {{name}}{{/optional}}{{^optional}}required {{type}} {{name}}{{/optional}}{{^last}}, {{/last}}{{/parameters}} }{{/hasParams}}) async {
     {{#hasParams}}
     final params = <String, dynamic>{
       {{#parameters}}
       '{{name}}': {{name}},
       {{/parameters}}
     };
-    return await _connection.call<{{returnType}}>('{{serviceName}}.{{methodName}}', params);
+    return await NativeRPC.call<{{returnType}}>('{{serviceName}}.{{methodName}}', params);
     {{/hasParams}}
     {{^hasParams}}
-    return await _connection.call<{{returnType}}>('{{serviceName}}.{{methodName}}');
+    return await NativeRPC.call<{{returnType}}>('{{serviceName}}.{{methodName}}');
     {{/hasParams}}
   }
 
@@ -56,17 +51,17 @@ class {{className}} {
   /// {{{line}}}
   {{/documentationLines}}
   {{/hasDocumentation}}
-  Future<{{returnType}}> {{methodName}}({{#hasParams}}{ {{#parameters}}{{#optional}}{{type}}? {{name}}{{/optional}}{{^optional}}required {{type}} {{name}}{{/optional}}{{^last}}, {{/last}}{{/parameters}} }{{/hasParams}}) async {
+  static Future<{{returnType}}> {{methodName}}({{#hasParams}}{ {{#parameters}}{{#optional}}{{type}}? {{name}}{{/optional}}{{^optional}}required {{type}} {{name}}{{/optional}}{{^last}}, {{/last}}{{/parameters}} }{{/hasParams}}) async {
     {{#hasParams}}
     final params = <String, dynamic>{
       {{#parameters}}
       '{{name}}': {{name}},
       {{/parameters}}
     };
-    return await _connection.call<{{returnType}}>('{{serviceName}}.{{methodName}}', params);
+    return await NativeRPC.call<{{returnType}}>('{{serviceName}}.{{methodName}}', params);
     {{/hasParams}}
     {{^hasParams}}
-    return await _connection.call<{{returnType}}>('{{serviceName}}.{{methodName}}');
+    return await NativeRPC.call<{{returnType}}>('{{serviceName}}.{{methodName}}');
     {{/hasParams}}
   }
 
@@ -77,17 +72,17 @@ class {{className}} {
   /// {{{line}}}
   {{/documentationLines}}
   {{/hasDocumentation}}
-  Future<void> {{methodName}}({{#hasParams}}{ {{#parameters}}{{#optional}}{{type}}? {{name}}{{/optional}}{{^optional}}required {{type}} {{name}}{{/optional}}{{^last}}, {{/last}}{{/parameters}} }{{/hasParams}}) async {
+  static Future<void> {{methodName}}({{#hasParams}}{ {{#parameters}}{{#optional}}{{type}}? {{name}}{{/optional}}{{^optional}}required {{type}} {{name}}{{/optional}}{{^last}}, {{/last}}{{/parameters}} }{{/hasParams}}) async {
     {{#hasParams}}
     final params = <String, dynamic>{
       {{#parameters}}
       '{{name}}': {{name}},
       {{/parameters}}
     };
-    await _connection.call<void>('{{serviceName}}.{{methodName}}', params);
+    await NativeRPC.call<void>('{{serviceName}}.{{methodName}}', params);
     {{/hasParams}}
     {{^hasParams}}
-    await _connection.call<void>('{{serviceName}}.{{methodName}}');
+    await NativeRPC.call<void>('{{serviceName}}.{{methodName}}');
     {{/hasParams}}
   }
 
@@ -103,8 +98,8 @@ class {{className}} {
   /// {{{line}}}
   {{/documentationLines}}
   {{/hasDocumentation}}
-  Stream<{{payloadType}}> get on{{eventNamePascal}} {
-    return _connection.subscribe<{{payloadType}}>('{{serviceName}}.{{eventName}}');
+  static Stream<dynamic> get on{{eventNamePascal}} {
+    return NativeRPC.stream('{{serviceName}}.{{eventName}}');
   }
 
   {{/events}}

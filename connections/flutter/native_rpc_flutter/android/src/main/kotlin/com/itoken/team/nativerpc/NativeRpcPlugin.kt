@@ -2,117 +2,190 @@
 // NativeRPC v2
 //
 // Flutter plugin entry point for Android
+// Uses NativeRPCServiceCenter + FlutterMethodChannelConnection architecture
 
 package com.itoken.team.nativerpc
 
+import android.app.Activity
 import io.flutter.embedding.engine.plugins.FlutterPlugin
-import io.flutter.plugin.common.MethodCall
+import io.flutter.embedding.engine.plugins.activity.ActivityAware
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodChannel
-import io.flutter.plugin.common.MethodChannel.MethodCallHandler
-import io.flutter.plugin.common.MethodChannel.Result
-import com.itoken.team.nativerpc.core.NativeRPCHost
+import com.itoken.team.nativerpc.connection.FlutterMethodChannelConnection
+import com.itoken.team.nativerpc.core.NativeRPCServiceCenter
+import com.itoken.team.nativerpc.core.NativeRPCServiceFactory
 import com.itoken.team.nativerpc.core.NativeRPCService
 
 /**
  * NativeRPC Flutter Plugin for Android
  *
- * This plugin provides the bridge between Flutter and NativeRPC.
- * It registers itself with Flutter and routes RPC calls to the NativeRPCHost.
+ * This plugin provides the bridge between Flutter and NativeRPC using the new
+ * NativeRPCServiceCenter architecture.
  *
- * Usage in your Application or Activity:
+ * ## New Architecture (v2.1)
+ *
+ * Services are:
+ * - **Registered by factory** at app startup via `NativeRPCServiceCenter`
+ * - **Instantiated per-connection** when first called
+ * - **Destroyed** when the connection closes
+ *
+ * ## Usage
+ *
+ * In your Application class or MainActivity:
  * ```kotlin
- * // Register services before Flutter initializes, or in your Application class
- * NativeRpcPlugin.registerService(CounterService())
- * NativeRpcPlugin.registerService(UserService())
+ * // 1. Register service factories at app startup
+ * NativeRPCServiceCenter.register(CounterService.Factory)
+ * // or using lambda:
+ * NativeRPCServiceCenter.register("counter") { context ->
+ *     CounterService(context)
+ * }
+ *
+ * // 2. The plugin handles connection setup automatically
+ * ```
+ *
+ * ## Legacy Migration
+ *
+ * Old code:
+ * ```kotlin
+ * NativeRpcPlugin.registerService(CounterService())  // ❌ Deprecated
+ * ```
+ *
+ * New code:
+ * ```kotlin
+ * NativeRPCServiceCenter.register(CounterService.Factory)  // ✅ New
  * ```
  */
-class NativeRpcPlugin : FlutterPlugin, MethodCallHandler {
+class NativeRpcPlugin : FlutterPlugin, ActivityAware {
     
     companion object {
-        /**
-         * The shared NativeRPC host instance
-         */
-        @Volatile
-        private var _sharedHost: NativeRPCHost? = null
+        private const val CHANNEL_NAME = "native_rpc"
         
         /**
-         * Get or create the shared host
-         */
-        val sharedHost: NativeRPCHost
-            get() {
-                if (_sharedHost == null) {
-                    synchronized(this) {
-                        if (_sharedHost == null) {
-                            _sharedHost = NativeRPCHost()
-                        }
-                    }
-                }
-                return _sharedHost!!
-            }
-        
-        /**
-         * Register a service with the shared host.
+         * Register a service factory with the global service center.
          * Call this before Flutter initializes, typically in your Application class.
+         *
+         * @param factory The service factory to register
+         *
+         * Example:
+         * ```kotlin
+         * NativeRpcPlugin.register(CounterService.Factory)
+         * ```
          */
-        fun registerService(service: NativeRPCService) {
-            sharedHost.register(service)
+        fun <T : NativeRPCService> register(factory: NativeRPCServiceFactory<T>) {
+            NativeRPCServiceCenter.register(factory)
         }
         
         /**
-         * Register multiple services at once
+         * Register a service with a lambda factory.
+         *
+         * @param serviceName The unique name for this service
+         * @param factory Lambda that creates service instances
+         *
+         * Example:
+         * ```kotlin
+         * NativeRpcPlugin.register("counter") { context ->
+         *     CounterService(context)
+         * }
+         * ```
          */
+        fun <T : NativeRPCService> register(
+            serviceName: String,
+            factory: (com.itoken.team.nativerpc.core.NativeRPCContext?) -> T
+        ) {
+            NativeRPCServiceCenter.register(serviceName, factory = factory)
+        }
+        
+        /**
+         * Register multiple service factories at once
+         */
+        fun register(vararg factories: NativeRPCServiceFactory<*>) {
+            NativeRPCServiceCenter.register(*factories)
+        }
+        
+        // MARK: - Deprecated API (for migration)
+        
+        /**
+         * @deprecated Use NativeRPCServiceCenter.register(factory) instead.
+         * This method exists only for backward compatibility during migration.
+         */
+        @Deprecated(
+            message = "Use NativeRPCServiceCenter.register(factory) instead",
+            replaceWith = ReplaceWith("NativeRPCServiceCenter.register(factory)")
+        )
+        fun registerService(service: NativeRPCService) {
+            println("[NativeRPC] Warning: registerService(instance) is deprecated. Use NativeRPCServiceCenter.register(factory) instead.")
+            // Legacy support: wrap the instance in a factory that always returns the same instance
+            // This is not ideal (no per-connection isolation) but maintains backward compatibility
+            val serviceName = service.name
+            NativeRPCServiceCenter.register(serviceName) { _ -> service }
+        }
+        
+        /**
+         * @deprecated Use NativeRPCServiceCenter.register(factory) instead.
+         */
+        @Deprecated(
+            message = "Use NativeRPCServiceCenter.register(...factories) instead",
+            replaceWith = ReplaceWith("NativeRPCServiceCenter.register(*factories)")
+        )
         fun registerServices(vararg services: NativeRPCService) {
             for (service in services) {
-                sharedHost.register(service)
+                @Suppress("DEPRECATION")
+                registerService(service)
             }
         }
     }
     
-    private lateinit var channel: MethodChannel
+    // MARK: - Instance Properties
+    
+    private var channel: MethodChannel? = null
+    private var connection: FlutterMethodChannelConnection? = null
+    private var activity: Activity? = null
+
+    // MARK: - FlutterPlugin
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
-        channel = MethodChannel(flutterPluginBinding.binaryMessenger, "native_rpc")
-        channel.setMethodCallHandler(this)
+        val methodChannel = MethodChannel(flutterPluginBinding.binaryMessenger, CHANNEL_NAME)
+        this.channel = methodChannel
         
-        // Start the host if not already started
+        // Create connection (uses NativeRPCServiceCenter internally)
+        val conn = FlutterMethodChannelConnection(
+            channel = methodChannel,
+            activity = activity
+        )
+        this.connection = conn
+        
         println("[NativeRPC] Plugin attached to Flutter engine")
     }
 
-    override fun onMethodCall(call: MethodCall, result: Result) {
-        when (call.method) {
-            "rpc" -> {
-                val message = call.arguments as? String
-                if (message == null) {
-                    result.error("INVALID_ARGUMENT", "Expected string argument", null)
-                    return
-                }
-                
-                // Process through the host
-                sharedHost.handleMessage(message) { response ->
-                    if (response != null) {
-                        result.success(response)
-                    } else {
-                        result.error("NO_RESPONSE", "No response from host", null)
-                    }
-                }
-            }
-            
-            "ping" -> {
-                result.success("pong")
-            }
-            
-            "getPlatformVersion" -> {
-                result.success("Android ${android.os.Build.VERSION.RELEASE}")
-            }
-            
-            else -> {
-                result.notImplemented()
-            }
-        }
-    }
-
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
-        channel.setMethodCallHandler(null)
+        // Close connection and clean up
+        connection?.close()
+        connection = null
+        channel = null
+        
         println("[NativeRPC] Plugin detached from Flutter engine")
+    }
+    
+    // MARK: - ActivityAware
+    
+    override fun onAttachedToActivity(binding: ActivityPluginBinding) {
+        activity = binding.activity
+        // Store activity in context storage for services to access
+        connection?.context?.set("activity", activity)
+    }
+    
+    override fun onDetachedFromActivityForConfigChanges() {
+        connection?.context?.remove<Activity>("activity")
+        activity = null
+    }
+    
+    override fun onReattachedToActivityForConfigChanges(binding: ActivityPluginBinding) {
+        activity = binding.activity
+        connection?.context?.set("activity", activity)
+    }
+    
+    override fun onDetachedFromActivity() {
+        connection?.context?.remove<Activity>("activity")
+        activity = null
     }
 }

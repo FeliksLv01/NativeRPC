@@ -40,6 +40,7 @@ object NativeRPCErrorCode {
     const val EVENT_NOT_DECLARED = -32003
     const val TIMEOUT = -32004
     const val CONNECTION_ERROR = -32005
+    const val CONNECTION_TYPE_NOT_SUPPORTED = -32006
 }
 
 // MARK: - Error Type
@@ -160,6 +161,14 @@ open class NativeRPCError(
             return NativeRPCError(
                 NativeRPCErrorCode.CONNECTION_ERROR,
                 message
+            )
+        }
+        
+        /** Connection type not supported by service */
+        fun connectionTypeNotSupported(service: String, connectionType: String): NativeRPCError {
+            return NativeRPCError(
+                NativeRPCErrorCode.CONNECTION_TYPE_NOT_SUPPORTED,
+                "Service '$service' does not support connection type '$connectionType'"
             )
         }
         

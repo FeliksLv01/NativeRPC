@@ -54,7 +54,7 @@ Uses simplified JSON-RPC 2.0 format:
 On Android, the JavaScript interface is not available immediately when the page loads. The native bridge dispatches a `nativeRPCBridgeReady` event when ready. Use `waitForBridge()` or `NativeRPC.ready()` to wait for the bridge:
 
 ```typescript
-import { NativeRPC, waitForBridge } from '@aspect/nativerpc-web';
+import { NativeRPC, waitForBridge } from '@token-team/nativerpc-web';
 
 // Option 1: Using NativeRPC.ready()
 await NativeRPC.ready();
@@ -79,7 +79,7 @@ window.addEventListener('nativeRPCBridgeReady', () => {
 ### Simple API
 
 ```typescript
-import { NativeRPC } from '@aspect/nativerpc-web';
+import { NativeRPC } from '@token-team/nativerpc-web';
 
 // Wait for bridge (important on Android!)
 await NativeRPC.ready();
@@ -96,7 +96,7 @@ NativeRPC.on('counter.countChanged', (data) => {
 ### Advanced API
 
 ```typescript
-import { NativeRPCClient, WebViewBridgeConnection } from '@aspect/nativerpc-web';
+import { NativeRPCClient, WebViewBridgeConnection } from '@token-team/nativerpc-web';
 
 const connection = new WebViewBridgeConnection({
   debug: true,
@@ -246,7 +246,7 @@ window.__nativeRPCCallbacks.onMessage(jsonString);
 The TypeScript client automatically detects the platform:
 
 ```typescript
-import { getPlatform, isNativeRPCAvailable } from '@aspect/nativerpc-web';
+import { getPlatform, isNativeRPCAvailable } from '@token-team/nativerpc-web';
 
 console.log(getPlatform());        // 'ios', 'android', or 'unknown'
 console.log(isNativeRPCAvailable()); // true if running in WebView with bridge
@@ -267,7 +267,7 @@ The web connection supports iframes. Each iframe creates its own `NativeRPCClien
 
 ```typescript
 // In your iframe - works exactly the same as in main frame
-import { NativeRPC } from '@aspect/nativerpc-web';
+import { NativeRPC } from '@token-team/nativerpc-web';
 
 await NativeRPC.ready();
 const result = await NativeRPC.call('counter.increment', { step: 1 });

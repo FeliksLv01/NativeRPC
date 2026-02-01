@@ -1,5 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Internet permission for WebView to load web demo -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- Allow cleartext traffic for local development (localhost) -->
     <application
+        android:usesCleartextTraffic="true"
         android:label="native_rpc_example"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
@@ -25,6 +30,15 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        
+        <!-- WebView Activity for web demo -->
+        <activity
+            android:name=".WebViewActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.Light.DarkActionBar"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize"
+            android:hardwareAccelerated="true" />
+            
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

@@ -1,24 +1,33 @@
 // WebViewNativeRPCBridge.kt
-// NativeRPCKit
+// NativeRPCKit v2.1
 //
-// Android WebView bridge that connects JavaScript to NativeRPCHost
+// Android WebView bridge that connects JavaScript to NativeRPC
+// Uses NativeRPCServiceCenter architecture
 //
 // Usage:
 // ```kotlin
 // import android.webkit.WebView
-// import com.itoken.team.nativerpc.core.NativeRPCHost
+// import com.itoken.team.nativerpc.core.NativeRPCServiceCenter
 // import com.itoken.team.nativerpc.webview.WebViewNativeRPCBridge
 //
 // class MainActivity : AppCompatActivity() {
 //     private lateinit var webView: WebView
-//     private val rpcHost = NativeRPCHost()
+//     private var bridge: WebViewNativeRPCBridge? = null
 //
 //     override fun onCreate(savedInstanceState: Bundle?) {
 //         super.onCreate(savedInstanceState)
 //
-//         // Create and attach bridge
-//         val bridge = WebViewNativeRPCBridge(webView, rpcHost)
-//         bridge.attach()
+//         // 1. Register services at app startup
+//         NativeRPCServiceCenter.register(CounterService.Factory)
+//
+//         // 2. Create and attach bridge
+//         bridge = WebViewNativeRPCBridge(webView)
+//         bridge?.attach()
+//     }
+//
+//     override fun onDestroy() {
+//         bridge?.detach()
+//         super.onDestroy()
 //     }
 // }
 // ```
@@ -32,18 +41,22 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.itoken.team.nativerpc.connection.NativeRPCConnection
-import com.itoken.team.nativerpc.core.NativeRPCHost
+import com.itoken.team.nativerpc.core.NativeRPCConnectionType
 import org.json.JSONObject
 import java.lang.ref.WeakReference
-import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * A bridge that connects JavaScript in an Android WebView to a NativeRPCHost.
+ * A bridge that connects JavaScript in an Android WebView to NativeRPC.
+ *
+ * Uses the NativeRPCServiceCenter architecture:
+ * - Services are registered by factory at app startup
+ * - Each bridge creates its own connection with per-connection service instances
+ * - When the bridge is detached, service instances are destroyed
  *
  * The bridge:
  * - Receives JSON-RPC messages from JavaScript via @JavascriptInterface
- * - Forwards messages to NativeRPCHost for processing
+ * - Forwards messages to the connection's stub for processing
  * - Sends responses and events back to JavaScript via evaluateJavascript
  *
  * ## JavaScript API
@@ -61,7 +74,11 @@ import java.util.concurrent.ConcurrentHashMap
  * ## Setup
  *
  * ```kotlin
- * val bridge = WebViewNativeRPCBridge(webView, rpcHost)
+ * // 1. Register services first
+ * NativeRPCServiceCenter.register(CounterService.Factory)
+ *
+ * // 2. Create and attach bridge
+ * val bridge = WebViewNativeRPCBridge(webView)
  * bridge.attach()
  *
  * // When done
@@ -70,14 +87,13 @@ import java.util.concurrent.ConcurrentHashMap
  */
 class WebViewNativeRPCBridge(
     webView: WebView,
-    private val host: NativeRPCHost,
     private val interfaceName: String = "NativeRPC"
 ) {
     
     // Use WeakReference to avoid memory leaks
     private val webViewRef: WeakReference<WebView> = WeakReference(webView)
     
-    // The connection to the host
+    // The connection (extends NativeRPCConnection base class)
     private var connection: WebViewConnection? = null
     
     // Handler for main thread operations
@@ -139,12 +155,9 @@ class WebViewNativeRPCBridge(
         // Add JavaScript interface
         webView.addJavascriptInterface(NativeRPCInterface(), interfaceName)
         
-        // Create connection
+        // Create connection (uses NativeRPCServiceCenter internally via stub)
         val conn = WebViewConnection(webView, debugEnabled)
         this.connection = conn
-        
-        // Register with host
-        host.addConnection(conn)
         
         // Set up WebViewClient to dispatch ready event when page loads
         setupWebViewClient(webView)
@@ -220,7 +233,8 @@ class WebViewNativeRPCBridge(
     /**
      * Detach the bridge from the WebView.
      *
-     * This removes the JavaScript interface and disconnects from the host.
+     * This removes the JavaScript interface and closes the connection,
+     * which destroys all per-connection service instances.
      */
     fun detach() {
         val webView = webViewRef.get()
@@ -228,11 +242,8 @@ class WebViewNativeRPCBridge(
         // Remove JavaScript interface
         webView?.removeJavascriptInterface(interfaceName)
         
-        // Remove connection from host
-        connection?.let { conn ->
-            host.removeConnection(conn)
-            conn.close()
-        }
+        // Close connection (this destroys all service instances)
+        connection?.close()
         connection = null
         
         log("Bridge detached")
@@ -248,27 +259,24 @@ class WebViewNativeRPCBridge(
 /**
  * Internal connection implementation for Android WebView.
  * 
+ * Extends NativeRPCConnection base class which provides:
+ * - Automatic context and stub creation
+ * - Per-connection service instance management via NativeRPCServiceCenter
+ * 
  * Supports iframe routing by tracking frameId from requests and including it in responses.
  */
 internal class WebViewConnection(
     webView: WebView,
-    private val debugEnabled: Boolean = false,
-    override val id: String = UUID.randomUUID().toString()
-) : NativeRPCConnection {
+    private val debugEnabled: Boolean = false
+) : NativeRPCConnection(
+    connectionType = NativeRPCConnectionType.WEB_VIEW
+) {
     
     private val webViewRef: WeakReference<WebView> = WeakReference(webView)
     private val mainHandler = Handler(Looper.getMainLooper())
     
     // Track frameId for each request ID (for iframe support)
     private val pendingFrameIds = ConcurrentHashMap<String, String>()
-    
-    @Volatile
-    private var _isActive: Boolean = true
-    
-    override val isActive: Boolean
-        get() = _isActive
-    
-    override var onMessage: ((String) -> Unit)? = null
     
     /**
      * Send data to JavaScript.
@@ -277,7 +285,7 @@ internal class WebViewConnection(
      * that was stored when the request was received and include it in the response.
      */
     override fun send(data: String) {
-        if (!_isActive) return
+        if (!isActive) return
         
         val webView = webViewRef.get() ?: return
         
@@ -328,19 +336,13 @@ internal class WebViewConnection(
         }
     }
     
-    override fun close() {
-        _isActive = false
-        onMessage = null
-        pendingFrameIds.clear()
-    }
-    
     /**
      * Handle received string from JavaScript.
      * 
      * Extracts and stores frameId from the request for later response routing.
      */
     fun handleReceivedString(string: String) {
-        if (!_isActive) return
+        if (!isActive) return
         
         // Extract and store frameId from request
         try {
@@ -355,7 +357,13 @@ internal class WebViewConnection(
             // Ignore parse errors
         }
         
-        onMessage?.invoke(string)
+        // Forward to connection's handleReceivedData (which forwards to stub)
+        handleReceivedData(string)
+    }
+    
+    override fun close() {
+        pendingFrameIds.clear()
+        super.close()
     }
     
     /**
@@ -378,13 +386,18 @@ internal class WebViewConnection(
 }
 
 /**
- * Extension function to easily create a NativeRPC bridge for a WebView
+ * Extension function to easily create a NativeRPC bridge for a WebView.
+ *
+ * Note: Make sure to register services with NativeRPCServiceCenter before calling this:
+ * ```kotlin
+ * NativeRPCServiceCenter.register(CounterService.Factory)
+ * val bridge = webView.createNativeRPCBridge()
+ * ```
  */
 fun WebView.createNativeRPCBridge(
-    host: NativeRPCHost,
     interfaceName: String = "NativeRPC"
 ): WebViewNativeRPCBridge {
-    val bridge = WebViewNativeRPCBridge(this, host, interfaceName)
+    val bridge = WebViewNativeRPCBridge(this, interfaceName)
     bridge.attach()
     return bridge
 }

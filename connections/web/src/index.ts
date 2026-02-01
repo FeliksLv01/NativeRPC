@@ -1,60 +1,227 @@
 // index.ts
-// NativeRPC Web Connection
+// NativeRPC Web SDK
 //
-// Main entry point - exports all public APIs
+// Simple singleton API for WebView communication with native iOS/Android
 
-// Core client
-export { NativeRPCClient, NativeRPCEventSubscription } from './client';
-export type { NativeRPCClientOptions } from './client';
-
-// WebView bridge connection
-export {
+import { NativeRPCError } from './errors';
+import {
+  NativeRPCRequest,
+  NativeRPCResponse,
+  NativeRPCNotification,
+  EventHandler,
+} from './types';
+import {
   WebViewBridgeConnection,
+  isNativeRPCAvailable as checkNativeRPCAvailable,
+  waitForBridge as waitForBridgeFn,
+} from './webview-bridge';
+
+// Re-export utilities and types
+export {
   isNativeRPCAvailable,
   getPlatform,
   waitForBridge,
   onBridgeReady,
 } from './webview-bridge';
-export type { WebViewBridgeConnectionOptions, Platform } from './webview-bridge';
+export type { Platform, WebViewBridgeConnectionOptions } from './webview-bridge';
 
-// Errors
 export { NativeRPCError } from './errors';
-
-// Types
 export type {
-  NativeRPCConnection,
   NativeRPCRequest,
   NativeRPCResponse,
   NativeRPCNotification,
   NativeRPCErrorObject,
   EventHandler,
 } from './types';
-
 export { NativeRPCErrorCode } from './types';
 
-// Simple singleton API for convenience
-import { NativeRPCClient } from './client';
-import { WebViewBridgeConnection, waitForBridge as waitForBridgeFn, isNativeRPCAvailable } from './webview-bridge';
-import type { EventHandler } from './types';
+/**
+ * Configuration options for NativeRPC
+ */
+export interface NativeRPCOptions {
+  /** Timeout for RPC calls in milliseconds (default: 30000) */
+  timeout?: number;
+  /** Enable debug logging (default: false) */
+  debug?: boolean;
+}
 
-let defaultClient: NativeRPCClient | null = null;
+/**
+ * Generate a unique ID
+ */
+function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+/**
+ * Internal state for NativeRPC singleton
+ */
+interface NativeRPCState {
+  connection: WebViewBridgeConnection | null;
+  timeout: number;
+  debug: boolean;
+  disposed: boolean;
+  pendingRequests: Map<
+    string,
+    {
+      resolve: (response: NativeRPCResponse) => void;
+      reject: (error: Error) => void;
+      timeoutId: ReturnType<typeof setTimeout>;
+    }
+  >;
+  eventHandlers: Map<string, Set<EventHandler>>;
+  unsubscribeMessages: (() => void) | null;
+}
+
+const state: NativeRPCState = {
+  connection: null,
+  timeout: 30000,
+  debug: false,
+  disposed: false,
+  pendingRequests: new Map(),
+  eventHandlers: new Map(),
+  unsubscribeMessages: null,
+};
+
+/**
+ * Log message if debug is enabled
+ */
+function log(...args: unknown[]): void {
+  if (state.debug) {
+    console.log('[NativeRPC]', ...args);
+  }
+}
+
+/**
+ * Ensure connection is initialized
+ */
+function ensureConnection(): WebViewBridgeConnection {
+  if (state.disposed) {
+    throw NativeRPCError.connectionError('NativeRPC has been disposed');
+  }
+  
+  if (!state.connection) {
+    state.connection = new WebViewBridgeConnection({ debug: state.debug });
+    setupMessageHandler();
+  }
+  
+  return state.connection;
+}
+
+/**
+ * Setup message handler for incoming messages
+ */
+function setupMessageHandler(): void {
+  if (!state.connection) return;
+  
+  state.unsubscribeMessages = state.connection.onMessage((message) => {
+    handleMessage(message);
+  });
+}
+
+/**
+ * Handle incoming message from native
+ */
+function handleMessage(message: string): void {
+  try {
+    const json = JSON.parse(message);
+
+    // Check if this is a notification (no id) or response (has id)
+    if (!('id' in json)) {
+      // It's a notification (event)
+      handleNotification(json as NativeRPCNotification);
+    } else {
+      // It's a response
+      handleResponse(json as NativeRPCResponse);
+    }
+  } catch (e) {
+    log('Error handling message:', e);
+  }
+}
+
+/**
+ * Handle response from native
+ */
+function handleResponse(response: NativeRPCResponse): void {
+  const pending = state.pendingRequests.get(response.id);
+  if (pending) {
+    clearTimeout(pending.timeoutId);
+    state.pendingRequests.delete(response.id);
+    pending.resolve(response);
+  }
+}
+
+/**
+ * Handle notification (event) from native
+ */
+function handleNotification(notification: NativeRPCNotification): void {
+  const handlers = state.eventHandlers.get(notification.method);
+  if (handlers) {
+    for (const handler of handlers) {
+      try {
+        handler(notification.params);
+      } catch (e) {
+        log('Error in event handler:', e);
+      }
+    }
+  }
+}
+
+/**
+ * Send subscribe request to native
+ */
+async function sendSubscribe(event: string): Promise<void> {
+  const connection = ensureConnection();
+  const request = {
+    id: generateId(),
+    method: 'rpc.subscribe' as const,
+    params: { event },
+  };
+  
+  try {
+    await connection.send(JSON.stringify(request));
+    log('Subscribed to event:', event);
+  } catch (e) {
+    log('Error subscribing to event:', e);
+    throw e;
+  }
+}
+
+/**
+ * Send unsubscribe request to native
+ */
+async function sendUnsubscribe(event: string): Promise<void> {
+  if (state.disposed || !state.connection) return;
+  
+  const request = {
+    id: generateId(),
+    method: 'rpc.unsubscribe' as const,
+    params: { event },
+  };
+  
+  try {
+    await state.connection.send(JSON.stringify(request));
+    log('Unsubscribed from event:', event);
+  } catch (e) {
+    log('Error unsubscribing from event:', e);
+  }
+}
 
 /**
  * Simple singleton API for NativeRPC.
- *
- * For most use cases, you can use this API directly without creating
- * a client instance manually.
  *
  * @example
  * ```typescript
  * import { NativeRPC } from '@token-team/nativerpc-web';
  *
+ * // Wait for bridge to be ready (important on Android)
+ * await NativeRPC.ready();
+ *
  * // Call a method
- * const result = await NativeRPC.call<number>('counter.increment', { step: 1 });
+ * const result = await NativeRPC.call<number>('counter.increment');
  *
  * // Subscribe to events
  * NativeRPC.on('counter.countChanged', (data) => {
- *   console.log('Count changed:', data);
+ *   console.log('Count changed:', data.count);
  * });
  *
  * // Unsubscribe
@@ -63,39 +230,80 @@ let defaultClient: NativeRPCClient | null = null;
  */
 export const NativeRPC = {
   /**
-   * Initialize the default client with optional configuration.
+   * Initialize NativeRPC with optional configuration.
    * This is called automatically on first use.
    */
-  initialize(options?: { timeout?: number; debug?: boolean }): void {
-    if (defaultClient) return;
+  init(options?: NativeRPCOptions): void {
+    if (state.connection) return;
 
-    const connection = new WebViewBridgeConnection({
-      debug: options?.debug,
-    });
+    state.timeout = options?.timeout ?? 30000;
+    state.debug = options?.debug ?? false;
+    state.disposed = false;
 
-    defaultClient = new NativeRPCClient(connection, options);
+    ensureConnection();
   },
 
   /**
-   * Get the default client instance.
-   * Creates one if it doesn't exist.
-   */
-  get client(): NativeRPCClient {
-    if (!defaultClient) {
-      this.initialize();
-    }
-    return defaultClient!;
-  },
-
-  /**
-   * Call a method on a service.
+   * Call a method on a native service.
    *
    * @param method - Method in format "service.method"
    * @param params - Optional parameters
    * @returns The result data
+   * @throws {NativeRPCError} on failure
+   *
+   * @example
+   * ```typescript
+   * const count = await NativeRPC.call<number>('counter.increment');
+   * const sum = await NativeRPC.call<number>('counter.add', { value: 5 });
+   * ```
    */
-  call<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
-    return this.client.call<T>(method, params);
+  async call<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
+    const connection = ensureConnection();
+
+    const request: NativeRPCRequest = {
+      id: generateId(),
+      method,
+      ...(params !== undefined && { params }),
+    };
+
+    const requestStr = JSON.stringify(request);
+    log('Sending request:', request);
+
+    // Try synchronous response first (some bridges support it)
+    const syncResponse = await connection.send(requestStr);
+
+    if (syncResponse) {
+      const response = JSON.parse(syncResponse) as NativeRPCResponse;
+      log('Received sync response:', response);
+
+      if (response.error) {
+        throw NativeRPCError.fromErrorObject(response.error);
+      }
+
+      return response.result as T;
+    }
+
+    // Wait for async response
+    return new Promise<T>((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        state.pendingRequests.delete(request.id);
+        reject(NativeRPCError.timeout(`Method call ${method} timed out`));
+      }, state.timeout);
+
+      state.pendingRequests.set(request.id, {
+        resolve: (response) => {
+          log('Received async response:', response);
+
+          if (response.error) {
+            reject(NativeRPCError.fromErrorObject(response.error));
+          } else {
+            resolve(response.result as T);
+          }
+        },
+        reject,
+        timeoutId,
+      });
+    });
   },
 
   /**
@@ -103,9 +311,32 @@ export const NativeRPC = {
    *
    * @param event - Event in format "service.event"
    * @param handler - Callback for event data
+   *
+   * @example
+   * ```typescript
+   * NativeRPC.on('counter.countChanged', (data) => {
+   *   console.log('Count:', data.count);
+   * });
+   * ```
    */
-  async on<T = unknown>(event: string, handler: EventHandler<T>): Promise<void> {
-    await this.client.subscribe(event, handler);
+  on<T = unknown>(event: string, handler: EventHandler<T>): void {
+    ensureConnection();
+
+    let handlers = state.eventHandlers.get(event);
+    const isFirstSubscriber = !handlers || handlers.size === 0;
+
+    if (!handlers) {
+      handlers = new Set();
+      state.eventHandlers.set(event, handlers);
+    }
+    handlers.add(handler as EventHandler);
+
+    if (isFirstSubscriber) {
+      // Send subscribe request to native (fire and forget)
+      sendSubscribe(event).catch((e) => {
+        log('Failed to subscribe:', e);
+      });
+    }
   },
 
   /**
@@ -113,17 +344,32 @@ export const NativeRPC = {
    *
    * @param event - Event in format "service.event"
    * @param handler - The handler to remove
+   *
+   * @example
+   * ```typescript
+   * NativeRPC.off('counter.countChanged', myHandler);
+   * ```
    */
   off<T = unknown>(event: string, handler: EventHandler<T>): void {
-    // Access private method via type assertion
-    (this.client as any).unsubscribe(event, handler);
+    const handlers = state.eventHandlers.get(event);
+    if (!handlers) return;
+
+    handlers.delete(handler as EventHandler);
+
+    if (handlers.size === 0) {
+      state.eventHandlers.delete(event);
+      // Send unsubscribe request to native (fire and forget)
+      sendUnsubscribe(event).catch((e) => {
+        log('Failed to unsubscribe:', e);
+      });
+    }
   },
 
   /**
    * Check if running in a native WebView with NativeRPC support.
    */
   get isAvailable(): boolean {
-    return isNativeRPCAvailable();
+    return checkNativeRPCAvailable();
   },
 
   /**
@@ -146,12 +392,28 @@ export const NativeRPC = {
   },
 
   /**
-   * Dispose the default client.
+   * Dispose NativeRPC and clean up resources.
    */
   dispose(): void {
-    if (defaultClient) {
-      defaultClient.dispose();
-      defaultClient = null;
+    if (state.disposed) return;
+    state.disposed = true;
+
+    // Reject all pending requests
+    for (const [id, pending] of state.pendingRequests) {
+      clearTimeout(pending.timeoutId);
+      pending.reject(NativeRPCError.connectionError('NativeRPC disposed'));
     }
+    state.pendingRequests.clear();
+
+    // Clear event handlers
+    state.eventHandlers.clear();
+
+    // Unsubscribe from messages
+    state.unsubscribeMessages?.();
+    state.unsubscribeMessages = null;
+
+    // Close connection
+    state.connection?.close();
+    state.connection = null;
   },
 };

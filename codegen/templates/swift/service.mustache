@@ -7,6 +7,12 @@
 // IMPORTANT: Method implementations (the code inside { }) are preserved during regeneration.
 // You can safely modify the implementation code. Only add/remove methods based on the TypeScript definition.
 //
+// USAGE:
+//   1. Register service type at app startup:
+//      NativeRPCServiceCenter.shared.register({{className}}.self)
+//
+//   2. Services are instantiated per-connection automatically
+//
 
 {{#imports}}
 import {{.}}
@@ -28,62 +34,75 @@ import {{.}}
 {{/hasDocumentation}}
 final class {{className}}: {{baseClass}} {
 
+    // MARK: - Service Registration
+    
+    /// The unique service name for registration
+    override class var serviceName: String { "{{serviceName}}" }
+    
+    // MARK: - Initialization
+    
+    /// Create a new instance with the given context
+    required init(context: NativeRPCContext?) {
+        super.init(context: context)
+    }
+
     // MARK: - Service Definition
     
-    override var definition: ServiceDefinition {
-        Service("{{serviceName}}") {
-            {{#syncMethods}}
-            {{#hasDocumentation}}
-            // {{{documentation}}}
-            {{/hasDocumentation}}
-            Function("{{methodName}}") { {{#hasParams}}({{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}){{/hasParams}} -> {{returnType}} in
-                {{#existingImplementation}}
+    @ServiceDefinitionBuilder
+    override func definition() -> ServiceDefinitionContainer {
+        // Note: Name is auto-set from serviceName class property
+        
+        {{#syncMethods}}
+        {{#hasDocumentation}}
+        // {{{documentation}}}
+        {{/hasDocumentation}}
+        Function("{{methodName}}") { {{#hasParams}}({{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}){{/hasParams}}{{^hasParams}}(){{/hasParams}} -> {{returnType}} in
+            {{#existingImplementation}}
 {{{.}}}
-                {{/existingImplementation}}
-                {{^existingImplementation}}
-                // TODO: Implement {{methodName}}
-                fatalError("Not implemented: {{methodName}}")
-                {{/existingImplementation}}
-            }
-            
-            {{/syncMethods}}
-            {{#asyncMethods}}
-            {{#hasDocumentation}}
-            // {{{documentation}}}
-            {{/hasDocumentation}}
-            AsyncFunction("{{methodName}}") { {{#hasParams}}({{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}){{/hasParams}} async throws -> {{returnType}} in
-                {{#existingImplementation}}
-{{{.}}}
-                {{/existingImplementation}}
-                {{^existingImplementation}}
-                // TODO: Implement {{methodName}}
-                fatalError("Not implemented: {{methodName}}")
-                {{/existingImplementation}}
-            }
-            
-            {{/asyncMethods}}
-            {{#voidMethods}}
-            {{#hasDocumentation}}
-            // {{{documentation}}}
-            {{/hasDocumentation}}
-            Function("{{methodName}}") { {{#hasParams}}({{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}){{/hasParams}} in
-                {{#existingImplementation}}
-{{{.}}}
-                {{/existingImplementation}}
-                {{^existingImplementation}}
-                // TODO: Implement {{methodName}}
-                {{/existingImplementation}}
-            }
-            
-            {{/voidMethods}}
-            {{#events}}
-            {{#hasDocumentation}}
-            // Event: {{{documentation}}}
-            {{/hasDocumentation}}
-            Event("{{eventName}}")
-            
-            {{/events}}
+            {{/existingImplementation}}
+            {{^existingImplementation}}
+            // TODO: Implement {{methodName}}
+            fatalError("Not implemented: {{methodName}}")
+            {{/existingImplementation}}
         }
+        
+        {{/syncMethods}}
+        {{#asyncMethods}}
+        {{#hasDocumentation}}
+        // {{{documentation}}}
+        {{/hasDocumentation}}
+        AsyncFunction("{{methodName}}") { {{#hasParams}}({{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}){{/hasParams}}{{^hasParams}}(){{/hasParams}} async throws -> {{returnType}} in
+            {{#existingImplementation}}
+{{{.}}}
+            {{/existingImplementation}}
+            {{^existingImplementation}}
+            // TODO: Implement {{methodName}}
+            fatalError("Not implemented: {{methodName}}")
+            {{/existingImplementation}}
+        }
+        
+        {{/asyncMethods}}
+        {{#voidMethods}}
+        {{#hasDocumentation}}
+        // {{{documentation}}}
+        {{/hasDocumentation}}
+        Function("{{methodName}}") { {{#hasParams}}({{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}){{/hasParams}} in
+            {{#existingImplementation}}
+{{{.}}}
+            {{/existingImplementation}}
+            {{^existingImplementation}}
+            // TODO: Implement {{methodName}}
+            {{/existingImplementation}}
+        }
+        
+        {{/voidMethods}}
+        {{#events}}
+        {{#hasDocumentation}}
+        // Event: {{{documentation}}}
+        {{/hasDocumentation}}
+        Events("{{eventName}}")
+        
+        {{/events}}
     }
     
     // MARK: - Event Emitters

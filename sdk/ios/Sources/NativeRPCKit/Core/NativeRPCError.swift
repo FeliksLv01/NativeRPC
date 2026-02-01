@@ -36,6 +36,7 @@ public struct NativeRPCErrorCode {
     public static let eventNotDeclared = -32003
     public static let timeout = -32004
     public static let connectionError = -32005
+    public static let connectionTypeNotSupported = -32006
 }
 
 // MARK: - Error Type
@@ -158,6 +159,14 @@ extension NativeRPCError {
         NativeRPCError(
             code: NativeRPCErrorCode.connectionError,
             message: message
+        )
+    }
+    
+    /// Connection type not supported by service
+    public static func connectionTypeNotSupported(service: String, connectionType: String) -> NativeRPCError {
+        NativeRPCError(
+            code: NativeRPCErrorCode.connectionTypeNotSupported,
+            message: "Service '\(service)' does not support connection type '\(connectionType)'"
         )
     }
     

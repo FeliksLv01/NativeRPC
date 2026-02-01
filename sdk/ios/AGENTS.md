@@ -8,7 +8,21 @@ This is a **connection-agnostic SDK** with **zero Flutter dependencies**. It can
 - Pure Swift iOS apps
 - Swift macOS apps
 - Flutter apps (via `native_rpc_flutter` plugin)
-- Any project that implements `NativeRPCConnection` protocol
+- Any project that extends `NativeRPCConnection` base class
+
+## Architecture (v2.1)
+
+The SDK uses a **per-connection service instance** architecture:
+
+- **`NativeRPCServiceCenter`** - Global singleton storing Service **types** (not instances)
+- **`NativeRPCConnection`** - Base class that auto-creates context and stub
+- **`NativeRPCStub`** - Per-connection service instance manager (lazy instantiation)
+- **`NativeRPCContext`** - Connection-scoped context with shared storage
+
+Services are:
+- **Registered by type** at app startup via `NativeRPCServiceCenter`
+- **Instantiated per-connection** when first called
+- **Destroyed** when the connection closes
 
 ## Protocol
 
@@ -31,19 +45,22 @@ NativeRPC uses a **simplified JSON-RPC 2.0** protocol:
 ## What Lives Here
 
 ### Sources/NativeRPCKit/
-- **Core/**: `NativeRPCHost`, `NativeRPCService`, `NativeRPCMessage`, `NativeRPCError`, `Promise`, `Convertible`
-  - Host manages services and connections
-  - Services are defined using DSL
-  - Message/Error handle protocol communication
-  - Promise enables callback-style async functions
-  - Convertible provides automatic type conversion from JSON
+- **Core/**:
+  - `NativeRPCServiceCenter` - Global singleton for service type registration
+  - `NativeRPCStub` - Per-connection message handler and service manager
+  - `NativeRPCContext` - Connection-scoped context with shared storage
+  - `NativeRPCService` - Base class for all services
+  - `NativeRPCMessage` - Message types and parser
+  - `NativeRPCError` - Error types and codes
+  - `Promise` - Callback-style async functions
+  - `Convertible` - Automatic type conversion from JSON
 - **DSL/**: `ServiceDefinitionBuilder`, `ServiceDefinition`, `DSLFactories`
   - Expo Modules-inspired declarative syntax
   - `@ServiceDefinitionBuilder` attribute for service definitions
   - Supports sync functions, async/await, and Promise-style async
-- **Connection/**: `NativeRPCConnection` protocol
-  - Abstract interface for any transport (MethodChannel, WebSocket, etc.)
-  - Implement this protocol to add custom connections
+- **Connection/**: `NativeRPCConnection` base class
+  - Extend this class to add custom transports
+  - Auto-creates context and stub
 
 ### Tests/
 - Swift Package unit tests (21 tests)
@@ -65,13 +82,26 @@ This is a standard Swift Package Manager project:
 import NativeRPCKit
 
 class MyService: NativeRPCService {
+    // Required: provide static service name for registration
+    override class var serviceName: String { "myService" }
+    
+    // Required: init with context
+    required init(context: NativeRPCContext?) {
+        super.init(context: context)
+    }
+    
     @ServiceDefinitionBuilder
     override func definition() -> ServiceDefinitionContainer {
-        Name("myservice")
+        // Note: Name() is no longer needed - serviceName is used automatically
         
         // Sync function
         Function("add") { (a: Int, b: Int) -> Int in
             a + b
+        }
+        
+        // Access connection-scoped context
+        Function("getUserId") { () -> String? in
+            self.context?.get("userId")
         }
         
         // Async function with Swift async/await
@@ -83,6 +113,24 @@ class MyService: NativeRPCService {
         Events("dataChanged", "statusUpdated")
     }
 }
+```
+
+### Registration and Connection Setup
+
+```swift
+import NativeRPCKit
+
+// 1. Register service types at app startup
+NativeRPCServiceCenter.shared.register(MyService.self)
+NativeRPCServiceCenter.shared.register(CounterService.self)
+
+// 2. Create connection (auto-starts, creates stub and context)
+let connection = WebViewNativeRPCConnection(webView: webView)
+// or
+let connection = FlutterMethodChannelConnection(channel: channel)
+
+// 3. When done:
+connection.close()  // destroys all service instances for this connection
 ```
 
 ### Async Functions
@@ -135,11 +183,6 @@ AsyncFunction("fetchUser") { (id: String, promise: Promise) in
 AsyncFunction("slowOperation") { (promise: Promise) in
     // ...
 }.withTimeout(30.0)  // 30 second timeout
-
-// Run on main queue
-AsyncFunction("uiOperation") { (promise: Promise) in
-    // ...
-}.runOnMain()
 ```
 
 ### Type Conversion (Convertible)
@@ -163,31 +206,6 @@ Function("setPosition") { (point: CGPoint) -> Void in
 }
 ```
 
-#### Custom Type Conversion
-
-```swift
-struct User {
-    let id: String
-    let name: String
-}
-
-extension User: Convertible {
-    static func convert(from value: Any?) throws -> User {
-        guard let dict = value as? [String: Any],
-              let id = dict["id"] as? String,
-              let name = dict["name"] as? String else {
-            throw ConversionError.typeMismatch(expected: "User", got: Swift.type(of: value))
-        }
-        return User(id: id, name: name)
-    }
-}
-
-// Now you can use User directly as parameter type
-Function("updateUser") { (user: User) -> Bool in
-    // ...
-}
-```
-
 #### Built-in Convertibles
 
 | Type | Accepts |
@@ -200,49 +218,69 @@ Function("updateUser") { (user: User) -> Bool in
 | `CGRect` | `{"x", "y", "width", "height"}` or `[x, y, w, h]` |
 | `UIColor` | `"#RRGGBB"`, `"#RRGGBBAA"`, or `{"r", "g", "b", "a?"}` |
 
-### Standalone Swift App (No Flutter)
+### Custom Connection Implementation
 
 ```swift
 import NativeRPCKit
 
-// 1. Define your service
-class MyService: NativeRPCService {
-    @ServiceDefinitionBuilder
-    override func definition() -> ServiceDefinitionContainer {
-        Name("myservice")
-        Function("hello") { (name: String) -> String in
-            return "Hello, \(name)!"
+// Extend NativeRPCConnection base class
+class MyWebSocketConnection: NativeRPCConnection {
+    private let socket: WebSocket
+    
+    init(socket: WebSocket) {
+        self.socket = socket
+        super.init(
+            connectionType: .webSocket,
+            rootView: nil,
+            rootViewController: nil
+        )
+        
+        // Set up socket listener
+        socket.onMessage = { [weak self] data in
+            self?.handleReceivedData(data)
         }
     }
-}
-
-// 2. Implement custom connection (e.g., WebSocket)
-class MyConnection: NativeRPCConnection {
-    func send(_ message: String) {
-        // Send JSON over your transport
+    
+    // Override to send JSON string over your transport
+    override func send(_ jsonString: String) {
+        socket.send(jsonString)
     }
-    // Call onMessage() when receiving data
+    
+    override func close() {
+        socket.disconnect()
+        super.close()
+    }
 }
 
-// 3. Setup host
-let host = NativeRPCHost()
-host.register(MyService())
-host.addConnection(MyConnection())
+// Usage
+let connection = MyWebSocketConnection(socket: socket)
+// Connection is ready - services are created per-connection when called
 ```
 
 ### With Flutter (via Plugin)
 
-The `native_rpc_flutter` plugin provides `FlutterMethodChannelConnection`:
-
 ```swift
 import NativeRPCKit
+import native_rpc_flutter
 
 // In AppDelegate.swift
-let host = NativeRPCHost()
-host.register(MyService())
 
-let connection = FlutterMethodChannelConnection(channelName: "native_rpc")
-host.addConnection(connection)
+// 1. Register service types at app startup
+NativeRPCServiceCenter.shared.register(CounterService.self)
+
+// 2. Create connection
+if let controller = window?.rootViewController as? FlutterViewController {
+    let channel = FlutterMethodChannel(
+        name: "native_rpc",
+        binaryMessenger: controller.binaryMessenger
+    )
+    let connection = FlutterMethodChannelConnection(
+        channel: channel,
+        rootViewController: controller
+    )
+    // Store connection to keep it alive
+    self.rpcConnection = connection
+}
 ```
 
 ## Build and Test
@@ -259,31 +297,34 @@ swift build
 swift test
 ```
 
-### Use in Flutter Plugin
-
-This SDK is integrated into the Flutter plugin at:
-`../../connections/flutter/native_rpc_flutter/ios/`
-
-The plugin's `.podspec` references this SDK.
-
 ## Key Classes
 
-### NativeRPCHost
-- Central registry for services
-- Manages multiple connections
-- Routes messages to appropriate services
-- Parses incoming JSON-RPC requests
-- Sends JSON-RPC responses and notifications
+### NativeRPCServiceCenter
+- Global singleton for service type registration
+- Thread-safe with `pthread_rwlock` (fast for read-heavy workloads)
+- Services registered by type, not instance
+
+### NativeRPCStub
+- Per-connection message handler
+- Lazily creates service instances
+- Manages event subscriptions
+- Destroys services when connection closes
+
+### NativeRPCContext
+- Connection-scoped configuration and state
+- Thread-safe shared storage (key-value)
+- Access to connection type, rootView, rootViewController
 
 ### NativeRPCService
 - Base class for all services
 - Override `definition()` to define service API
-- Call `emit(event, data)` to send events to clients
+- Access `context` for connection-scoped state
+- Call `emit(event, data)` to send events
 
-### NativeRPCConnection (Protocol)
-- `func send(_ message: String)` - Send JSON message
-- `func onMessage(_ message: String)` - Process incoming message
-- Implement this to add custom transports
+### NativeRPCConnection
+- Base class for connections
+- Auto-creates context and stub
+- Override `send()` for custom transports
 
 ### NativeRPCMessage
 - `NativeRPCMessageParser.parse()` - Parse incoming JSON-RPC messages
@@ -295,21 +336,6 @@ The plugin's `.podspec` references this SDK.
 ### NativeRPCError
 - `NativeRPCErrorCode` - Standard JSON-RPC 2.0 error codes (-32700 to -32603)
 - Custom error codes for service/event not found, timeout, connection error
-
-### ServiceDefinitionBuilder
-- DSL for declaratively defining services
-- Elements: `Name()`, `Function()`, `AsyncFunction()`, `Events()`
-- Fluent API: `.runOnQueue()`, `.runOnMain()`, `.withTimeout()`
-
-### Promise
-- Callback-style async for bridging legacy APIs
-- Thread-safe with NSLock
-- Supports `resolve()`, `reject()`, timeout
-
-### Convertible
-- Protocol for automatic type conversion from JSON
-- Built-in support for URL, Date, Data, CGPoint, CGSize, CGRect, UIColor
-- Extend with custom types
 
 ## Error Codes
 
@@ -325,6 +351,7 @@ The plugin's `.podspec` references this SDK.
 | -32003 | eventNotDeclared | Event not in service definition |
 | -32004 | timeout | Request timed out |
 | -32005 | connectionError | Connection failed |
+| -32006 | connectionTypeNotSupported | Service doesn't support connection type |
 
 ## Making Changes
 
@@ -337,14 +364,56 @@ The plugin's `.podspec` references this SDK.
 ## Design Philosophy
 
 - **No Flutter Dependencies**: Pure Swift, can run anywhere
+- **Per-Connection Isolation**: Each connection has its own service instances
+- **Connection-Scoped Context**: Services can share state within a connection
+- **Lazy Instantiation**: Services created only when first called
 - **Protocol-Agnostic**: Connection layer is pluggable
 - **Type-Safe**: Swift's type system enforces correctness
 - **Declarative**: DSL makes service definition clear and concise
 - **JSON-RPC 2.0**: Standard protocol with numeric error codes
-- **Expo-Inspired**: Promise API and Convertible similar to Expo Modules
+- **High Performance**: Uses `pthread_rwlock` for thread-safe reads
+
+## Code Generation
+
+Services can be generated from TypeScript interface definitions using the NativeRPC code generator:
+
+```bash
+cd codegen
+npm run generate -- generate --config examples/config.json --swift
+```
+
+Generated services include:
+- `override class var serviceName` for registration
+- `required init(context:)` initializer
+- `@ServiceDefinitionBuilder override func definition()` using DSL
+- Type-safe event emitter methods
+
+Example generated structure:
+
+```swift
+final class CounterRPCService: NativeRPCService {
+    override class var serviceName: String { "counter" }
+    
+    required init(context: NativeRPCContext?) {
+        super.init(context: context)
+    }
+
+    @ServiceDefinitionBuilder
+    override func definition() -> ServiceDefinitionContainer {
+        // Name is auto-set from serviceName
+        Function("getValue") { () -> Double in /* TODO */ }
+        Events("countChanged")
+    }
+}
+
+// Usage: NativeRPCServiceCenter.shared.register(CounterRPCService.self)
+```
+
+See `../../codegen/AGENTS.md` for code generator documentation.
 
 ## Related Documentation
 
 - Main README: `../../README.md`
+- Code Generator: `../../codegen/`
 - Protocol Spec: `../../protocol/`
 - Flutter Plugin: `../../connections/flutter/native_rpc_flutter/`

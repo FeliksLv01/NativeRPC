@@ -18,7 +18,7 @@ annotation class NativeRPCDsl
  * ```kotlin
  * class MyService : NativeRPCService() {
  *     override fun definition() = serviceDefinition {
- *         Name("myService")
+ *         // Name() is optional - auto-inferred from Factory.serviceName
  *
  *         Constant("version") { "1.0.0" }
  *
@@ -41,13 +41,40 @@ annotation class NativeRPCDsl
 @NativeRPCDsl
 class ServiceDefinitionBuilder {
     
-    private val container = ServiceDefinitionContainer()
+    @PublishedApi
+    internal val container = ServiceDefinitionContainer()
     
     // MARK: - Name
     
     /**
      * Set the service name
+     *
+     * **Deprecated in v2.2** - Service name is now automatically set from the
+     * Factory's serviceName. You no longer need to call Name() in your definition.
+     *
+     * ```kotlin
+     * // Before (deprecated):
+     * override fun definition() = serviceDefinition {
+     *     Name("counter")  // ❌ No longer needed
+     *     Function0("getValue") { ... }
+     * }
+     *
+     * // After:
+     * companion object {
+     *     val Factory = object : NativeRPCServiceFactory<MyService> {
+     *         override val serviceName = "counter"  // ✅ Define here
+     *         ...
+     *     }
+     * }
+     * override fun definition() = serviceDefinition {
+     *     Function0("getValue") { ... }  // Name is auto-set from Factory
+     * }
+     * ```
      */
+    @Deprecated(
+        message = "Name() is no longer needed. Service name is automatically set from Factory.serviceName.",
+        level = DeprecationLevel.WARNING
+    )
     fun Name(name: String) {
         container.register(ServiceNameDefinition(name))
     }

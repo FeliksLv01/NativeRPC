@@ -13,6 +13,11 @@ public final class ServiceDefinitionContainer {
     /// The service name
     public private(set) var serviceName: String = ""
     
+    /// Set the service name (used for auto-inference when Name() is not called)
+    public func setServiceName(_ name: String) {
+        serviceName = name
+    }
+    
     /// Registered sync functions
     private var syncFunctions: [String: AnySyncFunction] = [:]
     
@@ -191,6 +196,10 @@ public final class ServiceDefinitionContainer {
 /// A result builder for constructing service definitions using DSL syntax
 @resultBuilder
 public struct ServiceDefinitionBuilder {
+    
+    public static func buildBlock() -> [AnyServiceDefinitionElement] {
+        []
+    }
     
     public static func buildBlock(_ components: AnyServiceDefinitionElement...) -> [AnyServiceDefinitionElement] {
         components

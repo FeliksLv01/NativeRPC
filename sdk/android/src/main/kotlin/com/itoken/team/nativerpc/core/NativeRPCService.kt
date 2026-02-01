@@ -10,29 +10,30 @@ import com.itoken.team.nativerpc.dsl.ServiceDefinitionContainer
 import com.itoken.team.nativerpc.dsl.serviceDefinition
 
 /**
- * Interface for the RPC host that manages services
- */
-interface NativeRPCHostProtocol {
-    /**
-     * Send a notification (event) to all subscribers
-     */
-    fun sendEvent(notification: NativeRPCNotification)
-    
-    /**
-     * Get a registered service by name
-     */
-    fun getService(name: String): NativeRPCService?
-}
-
-/**
  * Base class for NativeRPC services.
  *
- * Subclass this and override `definition()` to define your service using the DSL:
+ * Subclass this and override `definition()` to define your service using the DSL.
+ *
+ * ## New Architecture (v2.1)
+ *
+ * Services are now:
+ * - **Registered by factory** at app startup via `NativeRPCServiceCenter`
+ * - **Instantiated per-connection** when first called
+ * - **Destroyed** when the connection closes
  *
  * ```kotlin
- * class MyService : NativeRPCService() {
+ * class MyService(context: NativeRPCContext?) : NativeRPCService() {
+ *     
+ *     // Define the factory for registration
+ *     companion object {
+ *         val Factory = object : NativeRPCServiceFactory<MyService> {
+ *             override val serviceName = "myService"
+ *             override fun create(context: NativeRPCContext?) = MyService(context)
+ *         }
+ *     }
+ *     
  *     override fun definition() = serviceDefinition {
- *         Name("myService")
+ *         // Name() is optional - auto-inferred from Factory.serviceName
  *
  *         Constant("version") { "1.0.0" }
  *
@@ -45,14 +46,39 @@ interface NativeRPCHostProtocol {
  *         Events("userChanged", "configUpdated")
  *     }
  * }
+ *
+ * // Register at app startup
+ * NativeRPCServiceCenter.register(MyService.Factory)
+ *
+ * // Or use lambda registration
+ * NativeRPCServiceCenter.register("myService") { context ->
+ *     MyService(context)
+ * }
  * ```
  */
 abstract class NativeRPCService {
     
+    // MARK: - Instance Properties
+    
     /**
-     * Weak reference to the host
+     * The context for this connection (contains connection info and shared storage).
+     * Set internally when the service is created by the stub.
      */
-    var host: NativeRPCHostProtocol? = null
+    var internalContext: NativeRPCContext? = null
+        internal set
+    
+    /**
+     * The context for this connection.
+     * Use this to access connection-scoped state.
+     */
+    val context: NativeRPCContext?
+        get() = internalContext
+    
+    /**
+     * Weak reference to the stub that owns this service.
+     * Set internally when the service is created by the stub.
+     */
+    var stub: NativeRPCStub? = null
         internal set
     
     /**
@@ -67,6 +93,7 @@ abstract class NativeRPCService {
         get() {
             if (_definitionContainer == null) {
                 _definitionContainer = definition()
+                _definitionContainer?.triggerLifecycle(LifecycleType.CREATE)
             }
             return _definitionContainer!!
         }
@@ -85,19 +112,11 @@ abstract class NativeRPCService {
     // MARK: - Lifecycle
     
     /**
-     * Called when the service is registered with a host
-     */
-    open fun onRegistered(host: NativeRPCHostProtocol) {
-        this.host = host
-        definitionContainer.triggerLifecycle(LifecycleType.CREATE)
-    }
-    
-    /**
      * Called when the service is being destroyed
      */
     fun destroy() {
         definitionContainer.triggerLifecycle(LifecycleType.DESTROY)
-        host = null
+        stub = null
     }
     
     /**
@@ -129,12 +148,18 @@ abstract class NativeRPCService {
             throw NativeRPCError.eventNotDeclared(eventName, name)
         }
         
+        val stubRef = stub
+        if (stubRef == null) {
+            println("[NativeRPC] Warning: Cannot send event '$eventName' - service not attached to stub")
+            return
+        }
+        
         val notification = NativeRPCNotification.create(
             service = name,
             event = eventName,
             params = data?.let { JsonElementConverter.toJsonElement(it) }
         )
-        host?.sendEvent(notification)
+        stubRef.sendEvent(notification)
     }
     
     /**
@@ -188,6 +213,14 @@ abstract class NativeRPCService {
     fun onStopObserving(event: String? = null) {
         definitionContainer.stopObserving(event)
     }
+    
+    // MARK: - Context Convenience
+    
+    /**
+     * Get the connection type (convenience accessor)
+     */
+    val connectionType: NativeRPCConnectionType?
+        get() = context?.connectionType
 }
 
 /**
@@ -197,8 +230,6 @@ internal object JsonElementConverter {
     fun toJsonElement(value: Any?): kotlinx.serialization.json.JsonElement? {
         if (value == null) return null
         
-        // This is a simplified converter - in production you'd use 
-        // kotlinx.serialization properly
         return when (value) {
             is String -> kotlinx.serialization.json.JsonPrimitive(value)
             is Number -> kotlinx.serialization.json.JsonPrimitive(value)

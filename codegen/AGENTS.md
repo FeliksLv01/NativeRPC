@@ -98,6 +98,102 @@ Generate platform-specific code from ServiceModule:
 | **Dart** | Client | Flutter client calls |
 | **TypeScript** | Client | Web client calls |
 
+### 4. Generated Code Examples (Architecture v2.1)
+
+Generated services use the **per-connection service instance** pattern:
+
+#### Swift Generated Service
+
+```swift
+final class CounterRPCService: NativeRPCService {
+
+    // MARK: - Service Registration
+    
+    /// The unique service name for registration
+    override class var serviceName: String { "counter" }
+    
+    // MARK: - Initialization
+    
+    /// Create a new instance with the given context
+    required init(context: NativeRPCContext?) {
+        super.init(context: context)
+    }
+
+    // MARK: - Service Definition
+    
+    @ServiceDefinitionBuilder
+    override func definition() -> ServiceDefinitionContainer {
+        // Note: Name is auto-set from serviceName class property
+        
+        Function("getValue") { () -> Double in
+            // TODO: Implement getValue
+            fatalError("Not implemented: getValue")
+        }
+        
+        AsyncFunction("fetchData") { (id: String) async throws -> Data in
+            // TODO: Implement fetchData
+            fatalError("Not implemented: fetchData")
+        }
+        
+        Events("countChanged")
+    }
+}
+
+// Usage: NativeRPCServiceCenter.shared.register(CounterRPCService.self)
+```
+
+#### Kotlin Generated Service
+
+```kotlin
+class CounterRPCService(context: NativeRPCContext? = null) : NativeRPCService() {
+
+    // region Factory
+
+    companion object {
+        /**
+         * Factory for creating CounterRPCService instances per-connection.
+         * Register with: NativeRPCServiceCenter.register(CounterRPCService.Factory)
+         */
+        val Factory = object : NativeRPCServiceFactory<CounterRPCService> {
+            override val serviceName = "counter"
+            override fun create(context: NativeRPCContext?) = CounterRPCService(context)
+        }
+    }
+
+    // endregion
+
+    // region Initialization
+
+    init {
+        this.internalContext = context
+    }
+
+    // endregion
+
+    // region Service Definition
+
+    override fun definition() = serviceDefinition {
+        // Note: Name is auto-set from Factory.serviceName
+        
+        Function("getValue") { ->
+            // TODO: Implement getValue
+            throw NotImplementedError("Not implemented: getValue")
+        }
+        
+        AsyncFunction("fetchData") { id: String ->
+            // TODO: Implement fetchData
+            throw NotImplementedError("Not implemented: fetchData")
+        }
+        
+        Events("countChanged")
+    }
+
+    // endregion
+}
+
+// Usage: NativeRPCServiceCenter.register(CounterRPCService.Factory)
+```
+
 ---
 
 ## Parser Principles
@@ -204,6 +300,17 @@ abstract class ServiceRenderer {
   }
 }
 ```
+
+### Renderer Imports
+
+Each renderer provides default imports for the target language:
+
+| Renderer | Default Imports |
+|----------|-----------------|
+| **Swift** | `NativeRPCKit` |
+| **Kotlin** | `NativeRPCService`, `NativeRPCContext`, `NativeRPCServiceFactory`, `serviceDefinition` |
+| **Dart** | `package:native_rpc_flutter/native_rpc_flutter.dart` |
+| **TypeScript** | (none) |
 
 ### Service Naming Rules
 
@@ -403,3 +510,51 @@ Specify custom template path in configuration:
 - **Flutter Connection**: `../connections/flutter/`
 - **Architecture Docs**: `../docs/CODEGEN-ARCHITECTURE.md`
 - **Inspiration**: [ts-gyb](https://github.com/nicklockwood/ts-gyb)
+
+---
+
+## Architecture Notes (v2.1)
+
+The code generator produces services compatible with NativeRPC v2.1 architecture:
+
+### Per-Connection Service Instances
+
+Services are no longer singletons. Each connection gets its own service instances:
+
+```
+App Startup:
+  Swift:  NativeRPCServiceCenter.shared.register(MyService.self)
+  Kotlin: NativeRPCServiceCenter.register(MyService.Factory)
+                ↓
+Connection Created:
+  Connection auto-creates NativeRPCContext and NativeRPCStub
+                ↓
+First RPC Call to "myservice.method":
+  Stub lazily creates service instance with context
+                ↓
+Connection Closed:
+  All service instances for this connection are destroyed
+```
+
+### Key Patterns
+
+| Platform | Registration Pattern | Factory Pattern |
+|----------|---------------------|-----------------|
+| **Swift** | `register(MyService.self)` | Uses `NativeRPCServiceRegistrable` protocol |
+| **Kotlin** | `register(MyService.Factory)` | Uses `NativeRPCServiceFactory<T>` interface |
+
+### Template Variables
+
+Templates have access to these Mustache variables:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{{serviceName}}` | Service identifier (lowercase) | `counter` |
+| `{{className}}` | Generated class name | `CounterRPCService` |
+| `{{baseClass}}` | Base class to extend | `NativeRPCService` |
+| `{{#syncMethods}}` | Synchronous methods array | |
+| `{{#asyncMethods}}` | Async methods array | |
+| `{{#voidMethods}}` | Void-returning methods array | |
+| `{{#events}}` | Events array | |
+| `{{#hasParams}}` | Method has parameters | |
+| `{{#parameters}}` | Method parameters array | |

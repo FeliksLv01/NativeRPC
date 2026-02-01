@@ -117,19 +117,17 @@ With `serviceSuffix: "RPCService"`, the generator produces:
 
 ```dart
 class CounterRPCService {
-  final NativeRPCClient _client;
-
-  Future<int> getValue() async {
-    return await _client.call<int>('counter.getValue');
+  static Future<int> getValue() async {
+    return await NativeRPC.call<int>('counter.getValue');
   }
 
-  Future<int> add({ required int value }) async {
+  static Future<int> add({ required int value }) async {
     final params = { 'value': value };
-    return await _client.call<int>('counter.add', params);
+    return await NativeRPC.call<int>('counter.add', params);
   }
 
-  Stream<CountChangedPayload> get onCountChangedStream {
-    return _client.subscribeStream('counter.countChanged');
+  static Stream<dynamic> get onCountChangedStream {
+    return NativeRPC.stream('counter.countChanged');
   }
 }
 ```
@@ -138,28 +136,33 @@ class CounterRPCService {
 
 ```swift
 final class CounterRPCService: NativeRPCService {
-    override var definition: ServiceDefinition {
-        Service("counter") {
-            Function("getValue") { () -> Int in
-                // Your implementation here
-            }
-            
-            Function("add") { (value: Int) -> Int in
-                // Your implementation here
-            }
-            
-            AsyncFunction("getValueDelayed") { (delayMs: Int) async throws -> Int in
-                // Your implementation here
-            }
-            
-            Event("countChanged")
+    override class var serviceName: String { "counter" }
+    
+    @ServiceDefinitionBuilder
+    override func definition() -> ServiceDefinitionContainer {
+        // Note: Name is auto-set from serviceName class property
+        
+        Function("getValue") { () -> Int in
+            // Your implementation here
         }
+        
+        Function("add") { (value: Int) -> Int in
+            // Your implementation here
+        }
+        
+        AsyncFunction("getValueDelayed") { (delayMs: Int) async throws -> Int in
+            // Your implementation here
+        }
+        
+        Events("countChanged")
     }
     
     func emitCountChanged(_ payload: CountChangedPayload) {
         emit("countChanged", data: payload)
     }
 }
+
+// Register: NativeRPCServiceCenter.shared.register(CounterRPCService.self)
 ```
 
 ### Kotlin (Service Stub)
@@ -167,27 +170,40 @@ final class CounterRPCService: NativeRPCService {
 ```kotlin
 package com.itoken.team
 
-class CounterRPCService : NativeRPCService("counter") {
-    override fun definition() = service {
-        function("getValue") { ->
+class CounterRPCService(context: NativeRPCContext? = null) : NativeRPCService() {
+    companion object {
+        val Factory = object : NativeRPCServiceFactory<CounterRPCService> {
+            override val serviceName = "counter"
+            override fun create(context: NativeRPCContext?) = CounterRPCService(context)
+        }
+    }
+    
+    init { this.internalContext = context }
+    
+    override fun definition() = serviceDefinition {
+        // Note: Name is auto-set from Factory.serviceName
+        
+        Function("getValue") { ->
             // Your implementation here
         }
         
-        function("add") { value: Int ->
+        Function("add") { value: Int ->
             // Your implementation here
         }
         
-        suspendFunction("getValueDelayed") { delayMs: Int ->
+        AsyncFunction("getValueDelayed") { delayMs: Int ->
             // Your implementation here
         }
         
-        event("countChanged")
+        Events("countChanged")
     }
     
     fun emitCountChanged(payload: CountChangedPayload) {
         emit("countChanged", payload)
     }
 }
+
+// Register: NativeRPCServiceCenter.register(CounterRPCService.Factory)
 ```
 
 ## Method Types

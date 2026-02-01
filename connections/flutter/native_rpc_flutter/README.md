@@ -1,8 +1,7 @@
 # native_rpc_flutter
 
 Flutter plugin for NativeRPC. This package provides:
-- Simple singleton API (`NativeRPC.call`, `NativeRPC.on`)
-- Advanced client API (`NativeRPCClient`)
+- Simple singleton API (`NativeRPC.call`, `NativeRPC.on`, `NativeRPC.stream`)
 - MethodChannel transport
 
 ## Protocol
@@ -30,12 +29,20 @@ NativeRPC uses a **simplified JSON-RPC 2.0** protocol:
 ```dart
 import 'package:native_rpc_flutter/native_rpc_flutter.dart';
 
-// Call methods (auto-initializes on first use)
+// Initialize (optional, auto-initializes on first use)
+NativeRPC.init();
+
+// Call methods
 final value = await NativeRPC.call<int>('counter.increment');
 final sum = await NativeRPC.call<int>('math.add', {'a': 1, 'b': 2});
 
-// Listen to events
+// Listen to events (callback style)
 NativeRPC.on('counter.countChanged', (data) {
+  print('Count: ${data['count']}');
+});
+
+// Listen to events (stream style)
+NativeRPC.stream('counter.countChanged').listen((data) {
   print('Count: ${data['count']}');
 });
 
@@ -44,23 +51,9 @@ NativeRPC.off('counter.countChanged', myHandler);
 
 // Check connection
 final connected = await NativeRPC.ping();
-```
 
-### Advanced API
-
-```dart
-import 'package:native_rpc_flutter/native_rpc_flutter.dart';
-
-final connection = MethodChannelConnection(channelName: 'native_rpc');
-final client = NativeRPCClient(connection: connection);
-
-// Call methods
-final result = await client.call<int>('counter.increment');
-
-// Subscribe to events (returns a Stream)
-client.subscribeStream<Map>('counter.countChanged').listen((data) {
-  print('Count: ${data['count']}');
-});
+// Clean up
+NativeRPC.dispose();
 ```
 
 ## Error Handling
@@ -99,11 +92,13 @@ try {
 import NativeRPCKit
 
 class CounterService: NativeRPCService {
+    override class var serviceName: String { "counter" }
+    
     private var count = 0
     
     @ServiceDefinitionBuilder
     override func definition() -> ServiceDefinitionContainer {
-        Name("counter")
+        // Note: Name is auto-set from serviceName class property
         
         Function("increment") { [weak self] () -> Int in
             guard let self else { return 0 }
@@ -117,21 +112,29 @@ class CounterService: NativeRPCService {
 }
 
 // In AppDelegate.swift
-let host = NativeRPCHost()
-host.register(CounterService())
-host.addConnection(FlutterMethodChannelConnection(channelName: "native_rpc"))
+NativeRPCServiceCenter.shared.register(CounterService.self)
 ```
 
 ### Android (Kotlin)
 
 ```kotlin
 import com.itoken.team.nativerpc.core.*
+import com.itoken.team.nativerpc.dsl.serviceDefinition
 
-class CounterService : NativeRPCService() {
+class CounterService(context: NativeRPCContext? = null) : NativeRPCService() {
+    companion object {
+        val Factory = object : NativeRPCServiceFactory<CounterService> {
+            override val serviceName = "counter"
+            override fun create(context: NativeRPCContext?) = CounterService(context)
+        }
+    }
+    
+    init { this.internalContext = context }
+    
     private var count = 0
     
     override fun definition() = serviceDefinition {
-        Name("counter")
+        // Note: Name is auto-set from Factory.serviceName
         
         Function0<Int>("increment") {
             count++
@@ -143,10 +146,8 @@ class CounterService : NativeRPCService() {
     }
 }
 
-// In MainActivity.kt
-val host = NativeRPCHost()
-host.register(CounterService())
-host.addConnection(FlutterMethodChannelConnection(channelName = "native_rpc"))
+// In Application.onCreate() or MainActivity
+NativeRPCServiceCenter.register(CounterService.Factory)
 ```
 
 ## Package Structure
@@ -158,7 +159,6 @@ native_rpc_flutter/
 │   └── src/
 │       ├── native_rpc.dart          # Simple singleton API
 │       ├── runtime/
-│       │   ├── native_rpc_client.dart
 │       │   ├── native_rpc_connection.dart
 │       │   └── native_rpc_message.dart
 │       └── connection/

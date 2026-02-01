@@ -117,19 +117,17 @@ npx nativerpc-codegen generate --config nativerpc.config.json --dry-run
 
 ```dart
 class CounterRPCService {
-  final NativeRPCClient _client;
-
-  Future<int> getValue() async {
-    return await _client.call<int>('counter.getValue');
+  static Future<int> getValue() async {
+    return await NativeRPC.call<int>('counter.getValue');
   }
 
-  Future<int> add({ required int value }) async {
+  static Future<int> add({ required int value }) async {
     final params = { 'value': value };
-    return await _client.call<int>('counter.add', params);
+    return await NativeRPC.call<int>('counter.add', params);
   }
 
-  Stream<CountChangedPayload> get onCountChangedStream {
-    return _client.subscribeStream('counter.countChanged');
+  static Stream<dynamic> get onCountChangedStream {
+    return NativeRPC.stream('counter.countChanged');
   }
 }
 ```
@@ -138,28 +136,33 @@ class CounterRPCService {
 
 ```swift
 final class CounterRPCService: NativeRPCService {
-    override var definition: ServiceDefinition {
-        Service("counter") {
-            Function("getValue") { () -> Int in
-                // 在此实现
-            }
-            
-            Function("add") { (value: Int) -> Int in
-                // 在此实现
-            }
-            
-            AsyncFunction("getValueDelayed") { (delayMs: Int) async throws -> Int in
-                // 在此实现
-            }
-            
-            Event("countChanged")
+    override class var serviceName: String { "counter" }
+    
+    @ServiceDefinitionBuilder
+    override func definition() -> ServiceDefinitionContainer {
+        // 注意: Name 从 serviceName 类属性自动设置
+        
+        Function("getValue") { () -> Int in
+            // 在此实现
         }
+        
+        Function("add") { (value: Int) -> Int in
+            // 在此实现
+        }
+        
+        AsyncFunction("getValueDelayed") { (delayMs: Int) async throws -> Int in
+            // 在此实现
+        }
+        
+        Events("countChanged")
     }
     
     func emitCountChanged(_ payload: CountChangedPayload) {
         emit("countChanged", data: payload)
     }
 }
+
+// 注册: NativeRPCServiceCenter.shared.register(CounterRPCService.self)
 ```
 
 ### Kotlin (服务端存根)
@@ -167,27 +170,40 @@ final class CounterRPCService: NativeRPCService {
 ```kotlin
 package com.itoken.team
 
-class CounterRPCService : NativeRPCService("counter") {
-    override fun definition() = service {
-        function("getValue") { ->
+class CounterRPCService(context: NativeRPCContext? = null) : NativeRPCService() {
+    companion object {
+        val Factory = object : NativeRPCServiceFactory<CounterRPCService> {
+            override val serviceName = "counter"
+            override fun create(context: NativeRPCContext?) = CounterRPCService(context)
+        }
+    }
+    
+    init { this.internalContext = context }
+    
+    override fun definition() = serviceDefinition {
+        // 注意: Name 从 Factory.serviceName 自动设置
+        
+        Function("getValue") { ->
             // 在此实现
         }
         
-        function("add") { value: Int ->
+        Function("add") { value: Int ->
             // 在此实现
         }
         
-        suspendFunction("getValueDelayed") { delayMs: Int ->
+        AsyncFunction("getValueDelayed") { delayMs: Int ->
             // 在此实现
         }
         
-        event("countChanged")
+        Events("countChanged")
     }
     
     fun emitCountChanged(payload: CountChangedPayload) {
         emit("countChanged", payload)
     }
 }
+
+// 注册: NativeRPCServiceCenter.register(CounterRPCService.Factory)
 ```
 
 ## 方法类型

@@ -1,1 +1,9 @@
 rootProject.name = 'native_rpc'
+
+// Include NativeRPC SDK as a source dependency
+// Path: connections/flutter/native_rpc_flutter/android -> sdk/android (4 levels up)
+def sdkPath = file("${rootProject.projectDir}/../../../../sdk/android")
+if (sdkPath.exists()) {
+    include ':nativerpc-sdk'
+    project(':nativerpc-sdk').projectDir = sdkPath
+}

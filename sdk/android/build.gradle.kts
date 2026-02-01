@@ -1,10 +1,19 @@
 // build.gradle.kts
-// NativeRPC Android Library
+// NativeRPC Android SDK
+//
+// This is a connection-agnostic SDK with NO Flutter dependencies.
+// Flutter-specific connection implementations (FlutterMethodChannelConnection)
+// are in the Flutter plugin: connections/flutter/native_rpc_flutter/android/
 
 plugins {
     id("com.android.library")
     kotlin("android")
     kotlin("plugin.serialization") version "1.9.21"
+}
+
+repositories {
+    google()
+    mavenCentral()
 }
 
 android {
@@ -49,9 +58,6 @@ dependencies {
     implementation("org.jetbrains.kotlin:kotlin-stdlib:1.9.21")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
-    
-    // Flutter embedding (provided by the Flutter project)
-    compileOnly("io.flutter:flutter_embedding_debug:1.0.0-+")
     
     // Testing
     testImplementation("junit:junit:4.13.2")
