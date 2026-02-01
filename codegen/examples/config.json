@@ -1,0 +1,29 @@
+{
+  "$schema": "./config-schema.json",
+  "parsing": {
+    "sources": ["./services.ts"],
+    "dropInterfaceIPrefix": true
+  },
+  "rendering": {
+    "serviceSuffix": "RPCService",
+    "dart": {
+      "outputPath": "./generated/dart",
+      "packageName": "native_rpc_client"
+    },
+    "typescript": {
+      "outputPath": "./generated/typescript",
+      "useESModules": true
+    },
+    "swift": {
+      "outputPath": "./generated/swift",
+      "imports": ["NativeRPCKit"],
+      "baseClass": "NativeRPCService"
+    },
+    "kotlin": {
+      "outputPath": "./generated/kotlin",
+      "packageName": "com.itoken.team",
+      "imports": ["com.itoken.team.nativerpc.*"],
+      "baseClass": "NativeRPCService"
+    }
+  }
+}

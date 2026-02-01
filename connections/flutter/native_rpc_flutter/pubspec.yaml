@@ -1,0 +1,23 @@
+name: native_rpc_flutter
+version: 2.0.0
+publish_to: 'none'
+
+description: NativeRPC Flutter plugin - Simple RPC framework for Flutter with native iOS/Android services
+
+environment:
+  sdk: ^3.0.0
+  flutter: '>=3.10.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  uuid: ^4.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.itoken.team.nativerpc
+        pluginClass: NativeRpcPlugin
+      ios:
+        pluginClass: NativeRpcPlugin

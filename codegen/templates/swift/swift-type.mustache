@@ -1,0 +1,16 @@
+/// {{name}}
+{{#hasDocumentation}}
+/// {{{documentation}}}
+{{/hasDocumentation}}
+struct {{name}}: Codable, Sendable {
+    {{#fields}}
+    /// {{{documentation}}}
+    {{#optional}}var{{/optional}}{{^optional}}let{{/optional}} {{name}}: {{type}}{{#optional}}?{{/optional}}
+    {{/fields}}
+    
+    init({{#fields}}{{name}}: {{type}}{{#optional}}? = nil{{/optional}}{{^last}}, {{/last}}{{/fields}}) {
+        {{#fields}}
+        self.{{name}} = {{name}}
+        {{/fields}}
+    }
+}

@@ -1,0 +1,14 @@
+/**
+ * {{name}}
+{{#hasDocumentation}}
+ * {{{documentation}}}
+{{/hasDocumentation}}
+ */
+export interface {{name}} {
+  {{#fields}}
+  /**
+   * {{{documentation}}}
+   */
+  {{name}}{{#optional}}?{{/optional}}: {{type}};
+  {{/fields}}
+}

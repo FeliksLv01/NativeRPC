@@ -1,0 +1,16 @@
+/**
+ * {{name}}
+{{#hasDocumentation}}
+ * {{{documentation}}}
+{{/hasDocumentation}}
+ */
+export enum {{name}} {
+  {{#members}}
+  {{#hasDocumentation}}
+  /**
+   * {{{documentation}}}
+   */
+  {{/hasDocumentation}}
+  {{tsName}} = {{#isString}}'{{value}}'{{/isString}}{{^isString}}{{value}}{{/isString}},
+  {{/members}}
+}

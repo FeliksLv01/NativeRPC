@@ -1,0 +1,43 @@
+/// {{{documentation}}}
+class {{name}} {
+  {{#fields}}
+  /// {{{documentation}}}
+  final {{type}}{{#optional}}?{{/optional}} {{name}};
+  {{/fields}}
+
+  const {{name}}({
+    {{#fields}}
+    {{#optional}}this.{{name}},{{/optional}}
+    {{^optional}}required this.{{name}},{{/optional}}
+    {{/fields}}
+  });
+
+  factory {{name}}.fromJson(Map<String, dynamic> json) {
+    return {{name}}(
+      {{#fields}}
+      {{name}}: {{{fromJson}}},
+      {{/fields}}
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      {{#fields}}
+      '{{name}}': {{{toJson}}},
+      {{/fields}}
+    };
+  }
+
+  @override
+  String toString() => '{{name}}({{#fields}}{{name}}: ${{name}}{{^last}}, {{/last}}{{/fields}})';
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is {{name}} &&
+          runtimeType == other.runtimeType{{#fields}} &&
+          {{name}} == other.{{name}}{{/fields}};
+
+  @override
+  int get hashCode => {{#fields}}{{name}}.hashCode{{^last}} ^ {{/last}}{{/fields}};
+}

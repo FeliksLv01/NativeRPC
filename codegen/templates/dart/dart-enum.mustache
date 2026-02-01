@@ -1,0 +1,22 @@
+/// {{name}}
+{{#hasDocumentation}}
+/// {{{documentation}}}
+{{/hasDocumentation}}
+enum {{name}} {
+  {{#members}}
+  {{#hasDocumentation}}
+  /// {{{documentation}}}
+  {{/hasDocumentation}}
+  {{dartName}}('{{value}}'){{^last}},{{/last}}{{#last}};{{/last}}
+  {{/members}}
+
+  final {{valueType}} value;
+  const {{name}}(this.value);
+
+  static {{name}}? fromValue({{valueType}} value) {
+    return {{name}}.values.cast<{{name}}?>().firstWhere(
+      (e) => e?.value == value,
+      orElse: () => null,
+    );
+  }
+}

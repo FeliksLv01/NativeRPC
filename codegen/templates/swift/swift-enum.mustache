@@ -1,0 +1,12 @@
+/// {{name}}
+{{#hasDocumentation}}
+/// {{{documentation}}}
+{{/hasDocumentation}}
+enum {{name}}: {{rawType}}, Codable, Sendable {
+    {{#members}}
+    {{#hasDocumentation}}
+    /// {{{documentation}}}
+    {{/hasDocumentation}}
+    case {{swiftName}} = {{#isString}}"{{value}}"{{/isString}}{{^isString}}{{value}}{{/isString}}
+    {{/members}}
+}

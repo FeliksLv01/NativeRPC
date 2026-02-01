@@ -1,0 +1,29 @@
+/**
+ * {{{documentation}}}
+ */
+data class {{name}}(
+    {{#fields}}
+    /**
+     * {{{documentation}}}
+     */
+    val {{name}}: {{type}}{{#optional}}? = null{{/optional}}{{^last}},{{/last}}
+    {{/fields}}
+) {
+    companion object {
+        fun fromJson(json: Map<String, Any?>): {{name}} {
+            return {{name}}(
+                {{#fields}}
+                {{name}} = {{{fromJson}}}{{^last}},{{/last}}
+                {{/fields}}
+            )
+        }
+    }
+
+    fun toJson(): Map<String, Any?> {
+        return mapOf(
+            {{#fields}}
+            "{{name}}" to {{{toJson}}}{{^last}},{{/last}}
+            {{/fields}}
+        )
+    }
+}

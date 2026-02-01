@@ -1,0 +1,52 @@
+{
+  "name": "@token-team/nativerpc-web",
+  "version": "1.0.0",
+  "description": "NativeRPC client for Web - WebView bridge for iOS/Android communication",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "nativerpc",
+    "rpc",
+    "json-rpc",
+    "webview",
+    "ios",
+    "android",
+    "wkwebview",
+    "javascript-bridge"
+  ],
+  "author": "FeliksLv01",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FeliksLv01/NativeRPC.git",
+    "directory": "connections/web"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {},
+  "engines": {
+    "node": ">=18"
+  }
+}

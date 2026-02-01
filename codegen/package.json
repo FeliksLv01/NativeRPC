@@ -1,0 +1,40 @@
+{
+  "name": "nativerpc-codegen",
+  "version": "1.0.0",
+  "description": "Code generator for NativeRPC - generates type-safe clients and service stubs from TypeScript definitions",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "nativerpc-codegen": "./bin/nativerpc-codegen"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "test": "jest",
+    "lint": "eslint src/**/*.ts",
+    "generate": "ts-node src/cli/index.ts"
+  },
+  "keywords": [
+    "nativerpc",
+    "codegen",
+    "typescript",
+    "swift",
+    "kotlin",
+    "dart",
+    "flutter"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/mustache": "^4.2.5",
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.2"
+  },
+  "dependencies": {
+    "commander": "^11.1.0",
+    "glob": "^10.3.10",
+    "mustache": "^4.2.0",
+    "typescript": "^5.3.0"
+  }
+}

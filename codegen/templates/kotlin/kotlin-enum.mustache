@@ -1,0 +1,22 @@
+/**
+ * {{name}}
+{{#hasDocumentation}}
+ * {{{documentation}}}
+{{/hasDocumentation}}
+ */
+enum class {{name}}(val value: {{rawType}}) {
+    {{#members}}
+    {{#hasDocumentation}}
+    /**
+     * {{{documentation}}}
+     */
+    {{/hasDocumentation}}
+    {{kotlinName}}({{#isString}}"{{value}}"{{/isString}}{{^isString}}{{value}}{{/isString}}){{^last}},{{/last}}{{#last}};{{/last}}
+    {{/members}}
+
+    companion object {
+        fun fromValue(value: {{rawType}}): {{name}}? {
+            return entries.find { it.value == value }
+        }
+    }
+}
