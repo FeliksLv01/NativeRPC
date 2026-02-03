@@ -1,12 +1,13 @@
 // ServiceDefinition.kt
-// NativeRPC v2
+// NativeRPC v2.2
 //
-// DSL definitions for service construction
+// DSL definitions for service construction with Codable-style params
 
 package com.itoken.team.nativerpc.dsl
 
+import com.google.gson.Gson
+import com.google.gson.JsonSyntaxException
 import com.itoken.team.nativerpc.core.NativeRPCError
-import kotlinx.serialization.json.JsonElement
 
 /**
  * Marker interface for all definition elements
@@ -31,6 +32,28 @@ enum class EventObservingType {
     STOP_OBSERVING
 }
 
+// MARK: - VoidParams / VoidResult
+
+/**
+ * Placeholder type for functions with no parameters.
+ * Used internally to satisfy type constraints when no params are needed.
+ */
+class VoidParams {
+    companion object {
+        val INSTANCE = VoidParams()
+    }
+}
+
+/**
+ * Placeholder type for functions that return nothing.
+ * Used internally to satisfy type constraints when no result is returned.
+ */
+class VoidResult {
+    companion object {
+        val INSTANCE = VoidResult()
+    }
+}
+
 // MARK: - Function Definitions
 
 /**
@@ -52,28 +75,138 @@ interface AsyncFunction : ServiceDefinitionElement {
 }
 
 /**
- * Synchronous function definition
+ * Synchronous function definition with Codable-style params support.
+ *
+ * Uses Gson for JSON deserialization, allowing any data class to be used
+ * as params without special annotations.
+ *
+ * @param Params The params type (must be a data class or VoidParams)
+ * @param R The return type
  */
-class SyncFunctionDefinition<R>(
+class SyncFunctionDefinition<Params : Any, R : Any?>(
     override val name: String,
     override val argumentsCount: Int,
-    private val body: (List<Any?>) -> R
+    private val paramsClass: Class<Params>,
+    private val body: (Params) -> R
 ) : SyncFunction {
+    
+    companion object {
+        private val gson = Gson()
+    }
+    
     override fun call(args: List<Any?>): Any? {
-        return body(args)
+        val params = decodeParams(args)
+        val result = body(params)
+        return encodeResult(result)
+    }
+    
+    @Suppress("UNCHECKED_CAST")
+    private fun decodeParams(args: List<Any?>): Params {
+        // VoidParams special handling - no params needed
+        if (paramsClass == VoidParams::class.java) {
+            return VoidParams.INSTANCE as Params
+        }
+        
+        // Extract dictionary from args
+        val dict = args.firstOrNull()
+        if (dict == null || dict !is Map<*, *>) {
+            throw NativeRPCError.invalidParams(
+                "Expected params dictionary, got: ${dict?.javaClass?.simpleName ?: "null"}"
+            )
+        }
+        
+        // Use Gson to decode
+        try {
+            val json = gson.toJson(dict)
+            return gson.fromJson(json, paramsClass)
+        } catch (e: JsonSyntaxException) {
+            throw NativeRPCError.invalidParams("Failed to decode params: ${e.message}")
+        }
+    }
+    
+    private fun encodeResult(result: R): Any? {
+        // For VoidResult or Unit, return null
+        if (result == null || result is VoidResult || result is Unit) {
+            return null
+        }
+        
+        // Primitive types pass through directly
+        if (result is Number || result is String || result is Boolean) {
+            return result
+        }
+        
+        // Complex types are serialized to Map via Gson
+        val json = gson.toJson(result)
+        @Suppress("UNCHECKED_CAST")
+        return gson.fromJson(json, Map::class.java)
     }
 }
 
 /**
- * Asynchronous (suspending) function definition
+ * Asynchronous (suspending) function definition with Codable-style params support.
+ *
+ * Uses Gson for JSON deserialization, allowing any data class to be used
+ * as params without special annotations.
+ *
+ * @param Params The params type (must be a data class or VoidParams)
+ * @param R The return type
  */
-class AsyncFunctionDefinition<R>(
+class AsyncFunctionDefinition<Params : Any, R : Any?>(
     override val name: String,
     override val argumentsCount: Int,
-    private val body: suspend (List<Any?>) -> R
+    private val paramsClass: Class<Params>,
+    private val body: suspend (Params) -> R
 ) : AsyncFunction {
+    
+    companion object {
+        private val gson = Gson()
+    }
+    
     override suspend fun call(args: List<Any?>): Any? {
-        return body(args)
+        val params = decodeParams(args)
+        val result = body(params)
+        return encodeResult(result)
+    }
+    
+    @Suppress("UNCHECKED_CAST")
+    private fun decodeParams(args: List<Any?>): Params {
+        // VoidParams special handling - no params needed
+        if (paramsClass == VoidParams::class.java) {
+            return VoidParams.INSTANCE as Params
+        }
+        
+        // Extract dictionary from args
+        val dict = args.firstOrNull()
+        if (dict == null || dict !is Map<*, *>) {
+            throw NativeRPCError.invalidParams(
+                "Expected params dictionary, got: ${dict?.javaClass?.simpleName ?: "null"}"
+            )
+        }
+        
+        // Use Gson to decode
+        try {
+            val json = gson.toJson(dict)
+            return gson.fromJson(json, paramsClass)
+        } catch (e: JsonSyntaxException) {
+            throw NativeRPCError.invalidParams("Failed to decode params: ${e.message}")
+        }
+    }
+    
+    private fun encodeResult(result: R): Any? {
+        // For VoidResult or Unit, return null
+        if (result == null || result is VoidResult || result is Unit) {
+            return null
+        }
+        
+        // Primitive types pass through directly
+        if (result is Number || result is String || result is Boolean) {
+            return result
+        }
+        
+        // Complex types are serialized to Map via Gson
+        val json = gson.toJson(result)
+        @Suppress("UNCHECKED_CAST")
+        return gson.fromJson(json, Map::class.java)
     }
 }
 

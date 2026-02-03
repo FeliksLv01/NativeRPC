@@ -14,6 +14,20 @@ private struct UnsafeSendableBox<T>: @unchecked Sendable {
     let value: T
 }
 
+// MARK: - VoidParams
+
+/// Placeholder type for functions with no parameters
+/// Used internally to satisfy Decodable constraint when no params are needed
+public struct VoidParams: Codable {
+    public init() {}
+}
+
+/// Placeholder type for functions that return nothing
+/// Used internally to satisfy Encodable constraint when no result is returned
+public struct VoidResult: Codable {
+    public init() {}
+}
+
 // MARK: - Base Protocols
 
 /// Base marker protocol for all definition types
@@ -42,90 +56,78 @@ public protocol AnyAsyncFunction: AnyServiceDefinitionElement {
 
 // MARK: - Sync Function Definition
 
-/// Synchronous function definition with type safety
-public final class SyncFunctionDefinition<Args, R>: AnySyncFunction {
+/// Synchronous function definition with Codable params support
+public final class SyncFunctionDefinition<Params: Decodable, R: Encodable>: AnySyncFunction {
     public let name: String
     public let argumentsCount: Int
-    private let body: (Args) throws -> R
+    private let body: (Params) throws -> R
     
-    public init(name: String, argumentsCount: Int, body: @escaping (Args) throws -> R) {
+    public init(name: String, argumentsCount: Int, body: @escaping (Params) throws -> R) {
         self.name = name
         self.argumentsCount = argumentsCount
         self.body = body
     }
     
     public func call(args: [Any]) throws -> Any? {
-        let typedArgs: Args = try convertArgs(args)
-        return try body(typedArgs)
+        let params: Params = try decodeParams(from: args)
+        let result = try body(params)
+        return try encodeResult(result)
     }
     
-    private func convertArgs(_ args: [Any]) throws -> Args {
-        if Args.self == Void.self {
-            return () as! Args
+    private func decodeParams(from args: [Any]) throws -> Params {
+        // VoidParams special handling - no params needed
+        if Params.self == VoidParams.self {
+            return VoidParams() as! Params
         }
         
-        // Try direct type match first
-        if argumentsCount == 1, let arg = args.first as? Args {
-            return arg
+        // Extract dictionary from args
+        guard let dict = args.first as? [String: Any] else {
+            throw NativeRPCError.invalidParams("Expected params dictionary, got: \(type(of: args.first ?? "nil"))")
         }
         
-        // Try using ArgumentConverter for single argument
-        if argumentsCount == 1, let firstArg = args.first {
-            if let converted = try? ArgumentConverter.convert(firstArg, to: Args.self) {
-                return converted
-            }
-            
-            // NEW: If first arg is a dictionary, try to extract values
-            if let dict = firstArg as? [String: Any] {
-                // Single value dict - extract the value
-                if dict.count == 1, let value = dict.values.first {
-                    if let converted = try? ArgumentConverter.convert(value, to: Args.self) {
-                        return converted
-                    }
-                }
-            }
+        // Use JSONDecoder to decode
+        do {
+            let data = try JSONSerialization.data(withJSONObject: dict)
+            return try JSONDecoder().decode(Params.self, from: data)
+        } catch let error as DecodingError {
+            throw NativeRPCError.invalidParams(describeDecodingError(error))
+        }
+    }
+    
+    private func encodeResult(_ result: R) throws -> Any {
+        // For VoidResult, return nil
+        if R.self == VoidResult.self {
+            return NSNull()
         }
         
-        // Try tuple conversion
-        if let tuple = tupleFromArray(args, type: Args.self) {
-            return tuple
+        // For basic types, return directly (they are already JSON-compatible)
+        if result is Int || result is Double || result is String || result is Bool {
+            return result
         }
         
-        // NEW: If single arg is dict with multiple values, try extracting values as tuple
-        if let dict = args.first as? [String: Any], dict.count == argumentsCount {
-            let values = Array(dict.values)
-            if let tuple = tupleFromArray(values, type: Args.self) {
-                return tuple
-            }
-            // Also try with ArgumentConverter for each value
-            let convertedValues = values.compactMap { value -> Any? in
-                return value
-            }
-            if let tuple = tupleFromArray(convertedValues, type: Args.self) {
-                return tuple
-            }
+        // For arrays and dictionaries of basic types, return directly
+        if result is [Any] || result is [String: Any] {
+            return result
         }
         
-        throw NativeRPCError.invalidArguments("Cannot convert arguments to expected type")
+        // For complex Encodable types, encode to JSON-compatible dictionary/array
+        let data = try JSONEncoder().encode(result)
+        return try JSONSerialization.jsonObject(with: data)
     }
 }
 
 // MARK: - Async Function Definition (Swift Concurrency)
 
-/// Default queue for async function execution
-private let defaultAsyncQueue = DispatchQueue(label: "com.nativerpc.async", qos: .userInitiated)
-
-/// Asynchronous function definition with type safety
+/// Asynchronous function definition with Codable params support
 /// Supports Swift async/await
 ///
 /// Note: Marked `@unchecked Sendable` because the `body` closure is captured
-/// and may be called from different isolation contexts. The generic parameters
-/// `Args` and `R` are not constrained to Sendable for API flexibility.
+/// and may be called from different isolation contexts.
 /// Safety invariant: Callers ensure arguments/results are safe to pass across boundaries.
-public final class AsyncFunctionDefinition<Args, R>: AnyAsyncFunction, @unchecked Sendable {
+public final class AsyncFunctionDefinition<Params: Decodable, R: Encodable>: AnyAsyncFunction, @unchecked Sendable {
     public let name: String
     public let argumentsCount: Int
-    private let body: (Args) async throws -> R
+    private let body: (Params) async throws -> R
     
     /// Queue to run the function on (nil = default async queue)
     public private(set) var queue: DispatchQueue?
@@ -133,27 +135,28 @@ public final class AsyncFunctionDefinition<Args, R>: AnyAsyncFunction, @unchecke
     /// Whether to run on MainActor
     public private(set) var requiresMainActor: Bool = false
     
-    public init(name: String, argumentsCount: Int, body: @escaping (Args) async throws -> R) {
+    public init(name: String, argumentsCount: Int, body: @escaping (Params) async throws -> R) {
         self.name = name
         self.argumentsCount = argumentsCount
         self.body = body
     }
     
     public func call(args: [Any]) async throws -> Any? {
-        let typedArgs: Args = try convertArgs(args)
+        let params: Params = try decodeParams(from: args)
         
+        let result: R
         if requiresMainActor {
             // Box values to cross isolation boundary safely
-            let argsBox = UnsafeSendableBox(value: typedArgs)
+            let paramsBox = UnsafeSendableBox(value: params)
             let bodyBox = UnsafeSendableBox(value: body)
             
             // Use withCheckedThrowingContinuation to properly bridge to MainActor
-            return try await withCheckedThrowingContinuation { continuation in
+            result = try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.main.async {
                     Task { @MainActor in
                         do {
-                            let result = try await bodyBox.value(argsBox.value)
-                            continuation.resume(returning: result)
+                            let r = try await bodyBox.value(paramsBox.value)
+                            continuation.resume(returning: r)
                         } catch {
                             continuation.resume(throwing: error)
                         }
@@ -162,15 +165,15 @@ public final class AsyncFunctionDefinition<Args, R>: AnyAsyncFunction, @unchecke
             }
         } else if let queue = queue {
             // Box values to cross isolation boundary safely
-            let argsBox = UnsafeSendableBox(value: typedArgs)
+            let paramsBox = UnsafeSendableBox(value: params)
             let bodyBox = UnsafeSendableBox(value: body)
             
-            return try await withCheckedThrowingContinuation { continuation in
+            result = try await withCheckedThrowingContinuation { continuation in
                 queue.async {
                     Task {
                         do {
-                            let result = try await bodyBox.value(argsBox.value)
-                            continuation.resume(returning: result)
+                            let r = try await bodyBox.value(paramsBox.value)
+                            continuation.resume(returning: r)
                         } catch {
                             continuation.resume(throwing: error)
                         }
@@ -178,191 +181,51 @@ public final class AsyncFunctionDefinition<Args, R>: AnyAsyncFunction, @unchecke
                 }
             }
         } else {
-            return try await body(typedArgs)
+            result = try await body(params)
+        }
+        
+        return try encodeResult(result)
+    }
+    
+    private func decodeParams(from args: [Any]) throws -> Params {
+        // VoidParams special handling - no params needed
+        if Params.self == VoidParams.self {
+            return VoidParams() as! Params
+        }
+        
+        // Extract dictionary from args
+        guard let dict = args.first as? [String: Any] else {
+            throw NativeRPCError.invalidParams("Expected params dictionary, got: \(type(of: args.first ?? "nil"))")
+        }
+        
+        // Use JSONDecoder to decode
+        do {
+            let data = try JSONSerialization.data(withJSONObject: dict)
+            return try JSONDecoder().decode(Params.self, from: data)
+        } catch let error as DecodingError {
+            throw NativeRPCError.invalidParams(describeDecodingError(error))
         }
     }
     
-    private func convertArgs(_ args: [Any]) throws -> Args {
-        if Args.self == Void.self {
-            return () as! Args
+    private func encodeResult(_ result: R) throws -> Any {
+        // For VoidResult, return nil
+        if R.self == VoidResult.self {
+            return NSNull()
         }
         
-        // Try direct type match first
-        if argumentsCount == 1, let arg = args.first as? Args {
-            return arg
+        // For basic types, return directly (they are already JSON-compatible)
+        if result is Int || result is Double || result is String || result is Bool {
+            return result
         }
         
-        // Try using ArgumentConverter for single argument
-        if argumentsCount == 1, let firstArg = args.first {
-            if let converted = try? ArgumentConverter.convert(firstArg, to: Args.self) {
-                return converted
-            }
-            
-            // NEW: If first arg is a dictionary, try to extract values
-            if let dict = firstArg as? [String: Any] {
-                // Single value dict - extract the value
-                if dict.count == 1, let value = dict.values.first {
-                    if let converted = try? ArgumentConverter.convert(value, to: Args.self) {
-                        return converted
-                    }
-                }
-            }
+        // For arrays and dictionaries of basic types, return directly
+        if result is [Any] || result is [String: Any] {
+            return result
         }
         
-        // Try tuple conversion
-        if let tuple = tupleFromArray(args, type: Args.self) {
-            return tuple
-        }
-        
-        // NEW: If single arg is dict with multiple values, try extracting values as tuple
-        if let dict = args.first as? [String: Any], dict.count == argumentsCount {
-            let values = Array(dict.values)
-            if let tuple = tupleFromArray(values, type: Args.self) {
-                return tuple
-            }
-        }
-        
-        throw NativeRPCError.invalidArguments("Cannot convert arguments to expected type")
-    }
-    
-    // MARK: - Fluent API
-    
-    /// Specify the queue to run the function on
-    @discardableResult
-    public func runOnQueue(_ queue: DispatchQueue?) -> Self {
-        self.queue = queue
-        return self
-    }
-    
-    /// Run on the main queue
-    @discardableResult
-    public func runOnMain() -> Self {
-        self.requiresMainActor = true
-        return self
-    }
-}
-
-// MARK: - Promise-based Async Function Definition
-
-/// Asynchronous function that uses Promise for callback-style async
-/// Use this when bridging callback-based APIs
-///
-/// Note: Marked `@unchecked Sendable` because the `body` closure is captured
-/// and may be called from different isolation contexts. The generic parameter
-/// `Args` is not constrained to Sendable for API flexibility.
-/// Safety invariant: Callers ensure arguments are safe to pass across boundaries.
-public final class PromiseAsyncFunctionDefinition<Args>: AnyAsyncFunction, @unchecked Sendable {
-    public let name: String
-    public let argumentsCount: Int
-    private let body: (Args, Promise) -> Void
-    
-    /// Queue to run the function on
-    public private(set) var queue: DispatchQueue?
-    
-    /// Whether to run on MainActor
-    public private(set) var requiresMainActor: Bool = false
-    
-    /// Timeout for the promise (default: 30 seconds)
-    public private(set) var timeout: TimeInterval = 30.0
-    
-    public init(name: String, argumentsCount: Int, body: @escaping (Args, Promise) -> Void) {
-        self.name = name
-        self.argumentsCount = argumentsCount
-        self.body = body
-    }
-    
-    public func call(args: [Any]) async throws -> Any? {
-        let typedArgs: Args = try convertArgs(args)
-        
-        // Box values to cross isolation boundary safely
-        let argsBox = UnsafeSendableBox(value: typedArgs)
-        let bodyBox = UnsafeSendableBox(value: body)
-        let capturedRequiresMainActor = self.requiresMainActor
-        let capturedQueue = self.queue
-        let capturedTimeout = self.timeout
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            let hasResumed = AtomicBool(false)
-            
-            let promise = Promise(
-                resolver: { value in
-                    // Box the value to safely cross isolation boundaries
-                    let valueBox = UnsafeSendableBox(value: value)
-                    if hasResumed.compareAndSwap(expected: false, desired: true) {
-                        continuation.resume(returning: valueBox.value)
-                    }
-                },
-                rejecter: { error in
-                    if hasResumed.compareAndSwap(expected: false, desired: true) {
-                        continuation.resume(throwing: error)
-                    }
-                }
-            )
-            
-            // Setup timeout
-            let timeoutTask = DispatchWorkItem {
-                if hasResumed.compareAndSwap(expected: false, desired: true) {
-                    continuation.resume(throwing: NativeRPCError.timeout("Promise timed out after \(capturedTimeout) seconds"))
-                }
-            }
-            DispatchQueue.global().asyncAfter(deadline: .now() + capturedTimeout, execute: timeoutTask)
-            
-            // Execute the body with boxed values
-            let executeBody: @Sendable () -> Void = {
-                bodyBox.value(argsBox.value, promise)
-            }
-            
-            if capturedRequiresMainActor {
-                DispatchQueue.main.async(execute: executeBody)
-            } else if let queue = capturedQueue {
-                queue.async(execute: executeBody)
-            } else {
-                executeBody()
-            }
-        }
-    }
-    
-    private func convertArgs(_ args: [Any]) throws -> Args {
-        if Args.self == Void.self {
-            return () as! Args
-        }
-        
-        // Try direct type match first
-        if argumentsCount == 1, let arg = args.first as? Args {
-            return arg
-        }
-        
-        // Try using ArgumentConverter for single argument
-        if argumentsCount == 1, let firstArg = args.first {
-            if let converted = try? ArgumentConverter.convert(firstArg, to: Args.self) {
-                return converted
-            }
-            
-            // NEW: If first arg is a dictionary, try to extract values
-            if let dict = firstArg as? [String: Any] {
-                // Single value dict - extract the value
-                if dict.count == 1, let value = dict.values.first {
-                    if let converted = try? ArgumentConverter.convert(value, to: Args.self) {
-                        return converted
-                    }
-                }
-            }
-        }
-        
-        // Try tuple conversion
-        if let tuple = tupleFromArray(args, type: Args.self) {
-            return tuple
-        }
-        
-        // NEW: If single arg is dict with multiple values, try extracting values as tuple
-        if let dict = args.first as? [String: Any], dict.count == argumentsCount {
-            let values = Array(dict.values)
-            if let tuple = tupleFromArray(values, type: Args.self) {
-                return tuple
-            }
-        }
-        
-        throw NativeRPCError.invalidArguments("Cannot convert arguments to expected type")
+        // For complex Encodable types, encode to JSON-compatible dictionary/array
+        let data = try JSONEncoder().encode(result)
+        return try JSONSerialization.jsonObject(with: data)
     }
     
     // MARK: - Fluent API
@@ -379,35 +242,6 @@ public final class PromiseAsyncFunctionDefinition<Args>: AnyAsyncFunction, @unch
     public func runOnMain() -> Self {
         self.requiresMainActor = true
         return self
-    }
-    
-    /// Set timeout for the promise
-    @discardableResult
-    public func withTimeout(_ seconds: TimeInterval) -> Self {
-        self.timeout = seconds
-        return self
-    }
-}
-
-// MARK: - Atomic Bool Helper
-
-private final class AtomicBool: @unchecked Sendable {
-    private var value: Bool
-    private let lock = NSLock()
-    
-    init(_ value: Bool) {
-        self.value = value
-    }
-    
-    func compareAndSwap(expected: Bool, desired: Bool) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        
-        if value == expected {
-            value = desired
-            return true
-        }
-        return false
     }
 }
 
@@ -482,22 +316,26 @@ public struct LifecycleDefinition: AnyServiceDefinitionElement {
 
 // MARK: - Helper Functions
 
-/// Convert array to tuple of expected type
-private func tupleFromArray<T>(_ array: [Any], type: T.Type) -> T? {
-    switch array.count {
-    case 1:
-        return array[0] as? T
-    case 2:
-        return (array[0], array[1]) as? T
-    case 3:
-        return (array[0], array[1], array[2]) as? T
-    case 4:
-        return (array[0], array[1], array[2], array[3]) as? T
-    case 5:
-        return (array[0], array[1], array[2], array[3], array[4]) as? T
-    case 6:
-        return (array[0], array[1], array[2], array[3], array[4], array[5]) as? T
-    default:
-        return nil
+/// Describe a DecodingError for user-friendly error messages
+private func describeDecodingError(_ error: DecodingError) -> String {
+    switch error {
+    case .keyNotFound(let key, _):
+        return "Missing required key: '\(key.stringValue)'"
+    case .typeMismatch(let type, let context):
+        let path = context.codingPath.map { $0.stringValue }.joined(separator: ".")
+        if path.isEmpty {
+            return "Type mismatch: expected \(type)"
+        }
+        return "Type mismatch at '\(path)': expected \(type)"
+    case .valueNotFound(let type, let context):
+        let path = context.codingPath.map { $0.stringValue }.joined(separator: ".")
+        if path.isEmpty {
+            return "Missing value: expected \(type)"
+        }
+        return "Missing value at '\(path)': expected \(type)"
+    case .dataCorrupted(let context):
+        return "Data corrupted: \(context.debugDescription)"
+    @unknown default:
+        return error.localizedDescription
     }
 }

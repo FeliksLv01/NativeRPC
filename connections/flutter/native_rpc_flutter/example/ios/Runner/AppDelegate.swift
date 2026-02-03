@@ -12,7 +12,7 @@ import native_rpc_flutter
     GeneratedPluginRegistrant.register(with: self)
     
     // Register NativeRPC services (by type, not instance)
-    NativeRpcPlugin.register(CounterService.self)
+    NativeRpcPlugin.register(CounterRPCService.self)
     
     // Set up connection
     if let controller = window?.rootViewController as? FlutterViewController {

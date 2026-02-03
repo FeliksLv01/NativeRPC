@@ -118,6 +118,14 @@ export interface ICounterService {
   add(args: { value: number }): number;
   
   /**
+   * Add two values to the counter
+   * @param a - First amount to add
+   * @param b - Second amount to add
+   * @returns New value after adding both values
+   */
+  addTwo(args: { a: number; b: number }): number;
+  
+  /**
    * Reset the counter to zero
    * @returns Zero (the reset value)
    */

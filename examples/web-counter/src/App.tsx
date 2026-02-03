@@ -180,6 +180,17 @@ export default function App() {
     }
   }
 
+  async function handleAddTwo(a: number, b: number) {
+    try {
+      const newValue = await NativeRPC.call<number>('counter.addTwo', { a, b })
+      setCount(newValue)
+      setError(null)
+      setAsyncResult(`addTwo(${a}, ${b}) = ${a} + ${b} = ${a + b}, new count: ${newValue}`)
+    } catch (e) {
+      setError(`addTwo failed: ${e}`)
+    }
+  }
+
   async function handleReset() {
     try {
       const newValue = await NativeRPC.call<number>('counter.reset')
@@ -269,6 +280,14 @@ export default function App() {
           </button>
           <button style={styles.buttonOutline} onClick={handleReset}>
             Reset
+          </button>
+        </div>
+        <div style={styles.buttonRow}>
+          <button style={{ ...styles.buttonOutline, borderColor: '#4caf50', color: '#4caf50' }} onClick={() => handleAddTwo(3, 7)}>
+            AddTwo(3, 7)
+          </button>
+          <button style={{ ...styles.buttonOutline, borderColor: '#4caf50', color: '#4caf50' }} onClick={() => handleAddTwo(10, 20)}>
+            AddTwo(10, 20)
           </button>
         </div>
       </div>

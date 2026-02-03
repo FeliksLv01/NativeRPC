@@ -56,12 +56,15 @@ final class {{className}}: {{baseClass}} {
         {{#hasDocumentation}}
         // {{{documentation}}}
         {{/hasDocumentation}}
-        Function("{{methodName}}") { {{#hasParams}}({{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}){{/hasParams}}{{^hasParams}}(){{/hasParams}} -> {{returnType}} in
+        Function("{{methodName}}") { {{#hasParams}}(params: {{methodNamePascal}}Params){{/hasParams}}{{^hasParams}}(){{/hasParams}} -> {{returnType}} in
             {{#existingImplementation}}
 {{{.}}}
             {{/existingImplementation}}
             {{^existingImplementation}}
             // TODO: Implement {{methodName}}
+            {{#hasParams}}
+            // Available params: {{#parameters}}params.{{name}}{{^last}}, {{/last}}{{/parameters}}
+            {{/hasParams}}
             fatalError("Not implemented: {{methodName}}")
             {{/existingImplementation}}
         }
@@ -71,12 +74,15 @@ final class {{className}}: {{baseClass}} {
         {{#hasDocumentation}}
         // {{{documentation}}}
         {{/hasDocumentation}}
-        AsyncFunction("{{methodName}}") { {{#hasParams}}({{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}){{/hasParams}}{{^hasParams}}(){{/hasParams}} async throws -> {{returnType}} in
+        AsyncFunction("{{methodName}}") { {{#hasParams}}(params: {{methodNamePascal}}Params){{/hasParams}}{{^hasParams}}(){{/hasParams}} async throws -> {{returnType}} in
             {{#existingImplementation}}
 {{{.}}}
             {{/existingImplementation}}
             {{^existingImplementation}}
             // TODO: Implement {{methodName}}
+            {{#hasParams}}
+            // Available params: {{#parameters}}params.{{name}}{{^last}}, {{/last}}{{/parameters}}
+            {{/hasParams}}
             fatalError("Not implemented: {{methodName}}")
             {{/existingImplementation}}
         }
@@ -86,12 +92,15 @@ final class {{className}}: {{baseClass}} {
         {{#hasDocumentation}}
         // {{{documentation}}}
         {{/hasDocumentation}}
-        Function("{{methodName}}") { {{#hasParams}}({{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}){{/hasParams}} in
+        Function("{{methodName}}") { {{#hasParams}}(params: {{methodNamePascal}}Params){{/hasParams}} in
             {{#existingImplementation}}
 {{{.}}}
             {{/existingImplementation}}
             {{^existingImplementation}}
             // TODO: Implement {{methodName}}
+            {{#hasParams}}
+            // Available params: {{#parameters}}params.{{name}}{{^last}}, {{/last}}{{/parameters}}
+            {{/hasParams}}
             {{/existingImplementation}}
         }
         

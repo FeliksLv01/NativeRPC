@@ -42,126 +42,133 @@ public func Constant(_ name: String, _ provider: @escaping () -> Any?) -> Consta
     ConstantDefinition(name: name, valueProvider: provider)
 }
 
-// MARK: - Sync Functions (0-6 arguments)
+// MARK: - Sync Functions
 
-/// Creates a synchronous function with no arguments
-public func Function<R>(_ name: String, _ body: @escaping () throws -> R) -> SyncFunctionDefinition<Void, R> {
+/// Creates a synchronous function with no parameters
+///
+/// Example:
+/// ```swift
+/// Function("getVersion") { () -> String in
+///     "1.0.0"
+/// }
+/// ```
+public func Function<R: Encodable>(_ name: String, _ body: @escaping () throws -> R) -> SyncFunctionDefinition<VoidParams, R> {
     SyncFunctionDefinition(name: name, argumentsCount: 0) { _ in try body() }
 }
 
-/// Creates a synchronous function with 1 argument
-public func Function<A0, R>(_ name: String, _ body: @escaping (A0) throws -> R) -> SyncFunctionDefinition<A0, R> {
+/// Creates a synchronous function returning Void (no return value)
+///
+/// Example:
+/// ```swift
+/// Function("reset") { () in
+///     self.counter = 0
+/// }
+/// ```
+public func Function(_ name: String, _ body: @escaping () throws -> Void) -> SyncFunctionDefinition<VoidParams, VoidResult> {
+    SyncFunctionDefinition(name: name, argumentsCount: 0) { _ in
+        try body()
+        return VoidResult()
+    }
+}
+
+/// Creates a synchronous function with Codable parameters
+///
+/// Example:
+/// ```swift
+/// struct AddParams: Codable {
+///     let a: Int
+///     let b: Int
+/// }
+///
+/// Function("add") { (params: AddParams) -> Int in
+///     params.a + params.b
+/// }
+/// ```
+public func Function<Params: Decodable, R: Encodable>(_ name: String, _ body: @escaping (Params) throws -> R) -> SyncFunctionDefinition<Params, R> {
     SyncFunctionDefinition(name: name, argumentsCount: 1, body: body)
 }
 
-/// Creates a synchronous function with 2 arguments
-public func Function<A0, A1, R>(_ name: String, _ body: @escaping (A0, A1) throws -> R) -> SyncFunctionDefinition<(A0, A1), R> {
-    SyncFunctionDefinition(name: name, argumentsCount: 2) { args in try body(args.0, args.1) }
+/// Creates a synchronous function with Codable parameters returning Void
+///
+/// Example:
+/// ```swift
+/// struct SetValueParams: Codable {
+///     let value: Int
+/// }
+///
+/// Function("setValue") { (params: SetValueParams) in
+///     self.value = params.value
+/// }
+/// ```
+public func Function<Params: Decodable>(_ name: String, _ body: @escaping (Params) throws -> Void) -> SyncFunctionDefinition<Params, VoidResult> {
+    SyncFunctionDefinition(name: name, argumentsCount: 1) { params in
+        try body(params)
+        return VoidResult()
+    }
 }
 
-/// Creates a synchronous function with 3 arguments
-public func Function<A0, A1, A2, R>(_ name: String, _ body: @escaping (A0, A1, A2) throws -> R) -> SyncFunctionDefinition<(A0, A1, A2), R> {
-    SyncFunctionDefinition(name: name, argumentsCount: 3) { args in try body(args.0, args.1, args.2) }
-}
+// MARK: - Async Functions (Swift Concurrency)
 
-/// Creates a synchronous function with 4 arguments
-public func Function<A0, A1, A2, A3, R>(_ name: String, _ body: @escaping (A0, A1, A2, A3) throws -> R) -> SyncFunctionDefinition<(A0, A1, A2, A3), R> {
-    SyncFunctionDefinition(name: name, argumentsCount: 4) { args in try body(args.0, args.1, args.2, args.3) }
-}
-
-/// Creates a synchronous function with 5 arguments
-public func Function<A0, A1, A2, A3, A4, R>(_ name: String, _ body: @escaping (A0, A1, A2, A3, A4) throws -> R) -> SyncFunctionDefinition<(A0, A1, A2, A3, A4), R> {
-    SyncFunctionDefinition(name: name, argumentsCount: 5) { args in try body(args.0, args.1, args.2, args.3, args.4) }
-}
-
-// MARK: - Async Functions with Swift Concurrency (0-6 arguments)
-
-/// Creates an asynchronous function with no arguments (Swift async/await)
-public func AsyncFunction<R>(_ name: String, _ body: @escaping () async throws -> R) -> AsyncFunctionDefinition<Void, R> {
+/// Creates an asynchronous function with no parameters (Swift async/await)
+///
+/// Example:
+/// ```swift
+/// AsyncFunction("fetchAll") { () async throws -> [Item] in
+///     try await api.fetchAllItems()
+/// }
+/// ```
+public func AsyncFunction<R: Encodable>(_ name: String, _ body: @escaping () async throws -> R) -> AsyncFunctionDefinition<VoidParams, R> {
     AsyncFunctionDefinition(name: name, argumentsCount: 0) { _ in try await body() }
 }
 
-/// Creates an asynchronous function with 1 argument (Swift async/await)
-public func AsyncFunction<A0, R>(_ name: String, _ body: @escaping (A0) async throws -> R) -> AsyncFunctionDefinition<A0, R> {
+/// Creates an asynchronous function with no parameters returning Void
+///
+/// Example:
+/// ```swift
+/// AsyncFunction("sync") { () async throws in
+///     try await api.syncData()
+/// }
+/// ```
+public func AsyncFunction(_ name: String, _ body: @escaping () async throws -> Void) -> AsyncFunctionDefinition<VoidParams, VoidResult> {
+    AsyncFunctionDefinition(name: name, argumentsCount: 0) { _ in
+        try await body()
+        return VoidResult()
+    }
+}
+
+/// Creates an asynchronous function with Codable parameters (Swift async/await)
+///
+/// Example:
+/// ```swift
+/// struct FetchUserParams: Codable {
+///     let id: String
+/// }
+///
+/// AsyncFunction("fetchUser") { (params: FetchUserParams) async throws -> User in
+///     try await api.getUser(params.id)
+/// }
+/// ```
+public func AsyncFunction<Params: Decodable, R: Encodable>(_ name: String, _ body: @escaping (Params) async throws -> R) -> AsyncFunctionDefinition<Params, R> {
     AsyncFunctionDefinition(name: name, argumentsCount: 1, body: body)
 }
 
-/// Creates an asynchronous function with 2 arguments (Swift async/await)
-public func AsyncFunction<A0, A1, R>(_ name: String, _ body: @escaping (A0, A1) async throws -> R) -> AsyncFunctionDefinition<(A0, A1), R> {
-    AsyncFunctionDefinition(name: name, argumentsCount: 2) { args in try await body(args.0, args.1) }
-}
-
-/// Creates an asynchronous function with 3 arguments (Swift async/await)
-public func AsyncFunction<A0, A1, A2, R>(_ name: String, _ body: @escaping (A0, A1, A2) async throws -> R) -> AsyncFunctionDefinition<(A0, A1, A2), R> {
-    AsyncFunctionDefinition(name: name, argumentsCount: 3) { args in try await body(args.0, args.1, args.2) }
-}
-
-/// Creates an asynchronous function with 4 arguments (Swift async/await)
-public func AsyncFunction<A0, A1, A2, A3, R>(_ name: String, _ body: @escaping (A0, A1, A2, A3) async throws -> R) -> AsyncFunctionDefinition<(A0, A1, A2, A3), R> {
-    AsyncFunctionDefinition(name: name, argumentsCount: 4) { args in try await body(args.0, args.1, args.2, args.3) }
-}
-
-/// Creates an asynchronous function with 5 arguments (Swift async/await)
-public func AsyncFunction<A0, A1, A2, A3, A4, R>(_ name: String, _ body: @escaping (A0, A1, A2, A3, A4) async throws -> R) -> AsyncFunctionDefinition<(A0, A1, A2, A3, A4), R> {
-    AsyncFunctionDefinition(name: name, argumentsCount: 5) { args in try await body(args.0, args.1, args.2, args.3, args.4) }
-}
-
-// MARK: - Async Functions with Promise (Callback-style, 0-5 arguments + Promise)
-
-/// Creates an asynchronous function with Promise only (no other arguments)
+/// Creates an asynchronous function with Codable parameters returning Void
 ///
 /// Example:
 /// ```swift
-/// AsyncFunction("fetchAll") { (promise: Promise) in
-///     LegacyAPI.fetchAll { result, error in
-///         if let error = error {
-///             promise.reject(error)
-///         } else {
-///             promise.resolve(result)
-///         }
-///     }
+/// struct DeleteUserParams: Codable {
+///     let id: String
 /// }
-/// ```
-public func AsyncFunction(_ name: String, _ body: @escaping (Promise) -> Void) -> PromiseAsyncFunctionDefinition<Void> {
-    PromiseAsyncFunctionDefinition(name: name, argumentsCount: 0) { _, promise in body(promise) }
-}
-
-/// Creates an asynchronous function with 1 argument + Promise
 ///
-/// Example:
-/// ```swift
-/// AsyncFunction("fetchUser") { (id: String, promise: Promise) in
-///     UserAPI.fetch(id) { user, error in
-///         if let error = error {
-///             promise.reject(error)
-///         } else {
-///             promise.resolve(user?.toDictionary())
-///         }
-///     }
+/// AsyncFunction("deleteUser") { (params: DeleteUserParams) async throws in
+///     try await api.deleteUser(params.id)
 /// }
 /// ```
-public func AsyncFunction<A0>(_ name: String, _ body: @escaping (A0, Promise) -> Void) -> PromiseAsyncFunctionDefinition<A0> {
-    PromiseAsyncFunctionDefinition(name: name, argumentsCount: 1, body: body)
-}
-
-/// Creates an asynchronous function with 2 arguments + Promise
-public func AsyncFunction<A0, A1>(_ name: String, _ body: @escaping (A0, A1, Promise) -> Void) -> PromiseAsyncFunctionDefinition<(A0, A1)> {
-    PromiseAsyncFunctionDefinition(name: name, argumentsCount: 2) { args, promise in body(args.0, args.1, promise) }
-}
-
-/// Creates an asynchronous function with 3 arguments + Promise
-public func AsyncFunction<A0, A1, A2>(_ name: String, _ body: @escaping (A0, A1, A2, Promise) -> Void) -> PromiseAsyncFunctionDefinition<(A0, A1, A2)> {
-    PromiseAsyncFunctionDefinition(name: name, argumentsCount: 3) { args, promise in body(args.0, args.1, args.2, promise) }
-}
-
-/// Creates an asynchronous function with 4 arguments + Promise
-public func AsyncFunction<A0, A1, A2, A3>(_ name: String, _ body: @escaping (A0, A1, A2, A3, Promise) -> Void) -> PromiseAsyncFunctionDefinition<(A0, A1, A2, A3)> {
-    PromiseAsyncFunctionDefinition(name: name, argumentsCount: 4) { args, promise in body(args.0, args.1, args.2, args.3, promise) }
-}
-
-/// Creates an asynchronous function with 5 arguments + Promise
-public func AsyncFunction<A0, A1, A2, A3, A4>(_ name: String, _ body: @escaping (A0, A1, A2, A3, A4, Promise) -> Void) -> PromiseAsyncFunctionDefinition<(A0, A1, A2, A3, A4)> {
-    PromiseAsyncFunctionDefinition(name: name, argumentsCount: 5) { args, promise in body(args.0, args.1, args.2, args.3, args.4, promise) }
+public func AsyncFunction<Params: Decodable>(_ name: String, _ body: @escaping (Params) async throws -> Void) -> AsyncFunctionDefinition<Params, VoidResult> {
+    AsyncFunctionDefinition(name: name, argumentsCount: 1) { params in
+        try await body(params)
+        return VoidResult()
+    }
 }
 
 // MARK: - Events

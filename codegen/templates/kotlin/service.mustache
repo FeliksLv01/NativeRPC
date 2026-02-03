@@ -29,6 +29,23 @@ import {{.}}
 
 {{/enums}}
 {{#services}}
+// region {{className}} Params Types
+
+{{#allMethods}}
+{{#hasParams}}
+/**
+ * Parameters for `{{methodName}}` method
+ */
+data class {{methodNamePascal}}Params(
+{{#parameters}}
+    val {{name}}: {{type}}{{#optional}}? = null{{/optional}}{{^last}},{{/last}}
+{{/parameters}}
+)
+
+{{/hasParams}}
+{{/allMethods}}
+// endregion
+
 {{#hasDocumentation}}
 /**
 {{#documentationLines}}
@@ -70,12 +87,20 @@ class {{className}}(context: NativeRPCContext? = null) : {{baseClass}}() {
         {{#hasDocumentation}}
         // {{{documentation}}}
         {{/hasDocumentation}}
-        Function("{{methodName}}") { {{#hasParams}}{{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}{{/hasParams}} ->
+        {{#hasParams}}
+        Function<{{methodNamePascal}}Params, {{returnType}}>("{{methodName}}") { params ->
+        {{/hasParams}}
+        {{^hasParams}}
+        Function<{{returnType}}>("{{methodName}}") {
+        {{/hasParams}}
             {{#existingImplementation}}
 {{{.}}}
             {{/existingImplementation}}
             {{^existingImplementation}}
             // TODO: Implement {{methodName}}
+            {{#hasParams}}
+            // Available: {{#parameters}}params.{{name}}{{^last}}, {{/last}}{{/parameters}}
+            {{/hasParams}}
             throw NotImplementedError("Not implemented: {{methodName}}")
             {{/existingImplementation}}
         }
@@ -85,12 +110,20 @@ class {{className}}(context: NativeRPCContext? = null) : {{baseClass}}() {
         {{#hasDocumentation}}
         // {{{documentation}}}
         {{/hasDocumentation}}
-        AsyncFunction("{{methodName}}") { {{#hasParams}}{{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}{{/hasParams}} ->
+        {{#hasParams}}
+        AsyncFunction<{{methodNamePascal}}Params, {{returnType}}>("{{methodName}}") { params ->
+        {{/hasParams}}
+        {{^hasParams}}
+        AsyncFunction<{{returnType}}>("{{methodName}}") {
+        {{/hasParams}}
             {{#existingImplementation}}
 {{{.}}}
             {{/existingImplementation}}
             {{^existingImplementation}}
             // TODO: Implement {{methodName}}
+            {{#hasParams}}
+            // Available: {{#parameters}}params.{{name}}{{^last}}, {{/last}}{{/parameters}}
+            {{/hasParams}}
             throw NotImplementedError("Not implemented: {{methodName}}")
             {{/existingImplementation}}
         }
@@ -100,12 +133,20 @@ class {{className}}(context: NativeRPCContext? = null) : {{baseClass}}() {
         {{#hasDocumentation}}
         // {{{documentation}}}
         {{/hasDocumentation}}
-        Function("{{methodName}}") { {{#hasParams}}{{#parameters}}{{name}}: {{type}}{{^last}}, {{/last}}{{/parameters}}{{/hasParams}} ->
+        {{#hasParams}}
+        Function<{{methodNamePascal}}Params, Unit>("{{methodName}}") { params ->
+        {{/hasParams}}
+        {{^hasParams}}
+        Function<Unit>("{{methodName}}") {
+        {{/hasParams}}
             {{#existingImplementation}}
 {{{.}}}
             {{/existingImplementation}}
             {{^existingImplementation}}
             // TODO: Implement {{methodName}}
+            {{#hasParams}}
+            // Available: {{#parameters}}params.{{name}}{{^last}}, {{/last}}{{/parameters}}
+            {{/hasParams}}
             {{/existingImplementation}}
         }
         

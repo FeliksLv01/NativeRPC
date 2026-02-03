@@ -114,11 +114,15 @@ NativeRPC uses a **simplified JSON-RPC 2.0** protocol:
 
 ## Usage Examples
 
-### 1. Define a Service with Factory
+### 1. Define a Service with Factory (Params Pattern)
 
 ```kotlin
 import com.itoken.team.nativerpc.core.*
 import com.itoken.team.nativerpc.dsl.*
+
+// Define Params data classes for methods with parameters
+data class AddParams(val value: Int)
+data class SetValueParams(val value: Int)
 
 class CounterService(context: NativeRPCContext? = null) : NativeRPCService() {
     
@@ -130,15 +134,31 @@ class CounterService(context: NativeRPCContext? = null) : NativeRPCService() {
         }
     }
     
+    init { this.internalContext = context }
+    
     private var count = 0
     
     override fun definition() = serviceDefinition {
         // Note: Name() is no longer needed - serviceName from Factory is used automatically
         
-        Function0<Int>("getValue") { count }
+        // No params: Function<ReturnType>("name") { ... }
+        Function<Int>("getValue") { count }
         
-        Function0<Int>("increment") {
+        Function<Int>("increment") {
             count++
+            emit("countChanged", mapOf("count" to count))
+            count
+        }
+        
+        // With params: Function<ParamsType, ReturnType>("name") { params -> ... }
+        Function<AddParams, Int>("add") { params ->
+            count += params.value
+            emit("countChanged", mapOf("count" to count))
+            count
+        }
+        
+        Function<SetValueParams, Int>("setValue") { params ->
+            count = params.value
             emit("countChanged", mapOf("count" to count))
             count
         }
@@ -272,8 +292,14 @@ class MyWebSocketConnection(
 ### ServiceDefinitionBuilder (DSL)
 - Kotlin DSL for declaratively defining services
 - `Name("serviceName")` - Set service name (deprecated, auto-set from Factory.serviceName)
-- `Function0/1/2<...>("name") { }` - Define methods
-- `AsyncFunction0/1/2<...>("name") { }` - Define async methods
+- **New Params Pattern (Recommended):**
+  - `Function<R>("name") { }` - No-param sync method
+  - `Function<Params, R>("name") { params -> }` - Sync method with Params
+  - `AsyncFunction<R>("name") { }` - No-param async method
+  - `AsyncFunction<Params, R>("name") { params -> }` - Async method with Params
+- **Legacy API (Deprecated):**
+  - `Function0/1/2<...>("name") { }` - Define methods (deprecated, use Params pattern)
+  - `AsyncFunction0/1/2<...>("name") { }` - Define async methods (deprecated)
 - `Events("event1", "event2")` - Declare events
 - `Constant("name") { value }` - Define constants
 
@@ -293,8 +319,11 @@ host.addConnection(connection)
 ### After (v2.1)
 
 ```kotlin
-// ✅ New pattern - per-connection service instances
-// 1. Add Factory to your service class
+// ✅ New pattern - per-connection service instances with Params pattern
+// 1. Define Params data classes
+data class AddParams(val value: Int)
+
+// 2. Add Factory to your service class
 class CounterService(context: NativeRPCContext? = null) : NativeRPCService() {
     companion object {
         val Factory = object : NativeRPCServiceFactory<CounterService> {
@@ -302,13 +331,29 @@ class CounterService(context: NativeRPCContext? = null) : NativeRPCService() {
             override fun create(context: NativeRPCContext?) = CounterService(context)
         }
     }
-    // ...
+    
+    init { this.internalContext = context }
+    
+    private var count = 0
+    
+    override fun definition() = serviceDefinition {
+        // No params
+        Function<Int>("getValue") { count }
+        
+        // With Params
+        Function<AddParams, Int>("add") { params ->
+            count += params.value
+            count
+        }
+        
+        Events("countChanged")
+    }
 }
 
-// 2. Register factory at startup
+// 3. Register factory at startup
 NativeRPCServiceCenter.register(CounterService.Factory)
 
-// 3. Create connection (no host needed)
+// 4. Create connection (no host needed)
 val connection = FlutterMethodChannelConnection(channel, activity)
 ```
 
@@ -339,6 +384,10 @@ Generated services include:
 Example generated structure:
 
 ```kotlin
+// Params data classes for methods with parameters
+data class AddParams(val value: Double)
+data class AddTwoParams(val a: Double, val b: Double)
+
 class CounterRPCService(context: NativeRPCContext? = null) : NativeRPCService() {
     companion object {
         val Factory = object : NativeRPCServiceFactory<CounterRPCService> {
@@ -350,8 +399,25 @@ class CounterRPCService(context: NativeRPCContext? = null) : NativeRPCService() 
     init { this.internalContext = context }
 
     override fun definition() = serviceDefinition {
-        // Name is auto-set from Factory.serviceName
-        Function("getValue") { -> /* TODO */ }
+        // No params: Function<ReturnType>
+        Function<Double>("getValue") {
+            // TODO: Implement getValue
+            throw NotImplementedError("Not implemented: getValue")
+        }
+        
+        // With params: Function<ParamsType, ReturnType>
+        Function<AddParams, Double>("add") { params ->
+            // TODO: Implement add
+            // Available: params.value
+            throw NotImplementedError("Not implemented: add")
+        }
+        
+        Function<AddTwoParams, Double>("addTwo") { params ->
+            // TODO: Implement addTwo
+            // Available: params.a, params.b
+            throw NotImplementedError("Not implemented: addTwo")
+        }
+        
         Events("countChanged")
     }
 }

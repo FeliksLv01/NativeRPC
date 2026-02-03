@@ -47,15 +47,18 @@ interface ServiceView {
   syncMethods: MethodView[];
   asyncMethods: MethodView[];
   voidMethods: MethodView[];
+  allMethods: MethodView[];
   events: EventView[];
 }
 
 interface MethodView {
   methodName: string;
+  methodNamePascal: string;
   documentation: string;
   documentationLines: { line: string }[];
   hasDocumentation: boolean;
   hasParams: boolean;
+  parameterCount: number;
   parameters: ParameterView[];
   returnType: string;
   existingImplementation?: string;
@@ -127,6 +130,7 @@ interface TemplateView {
   timestamp: string;
   imports: string[];
   packageName?: string;
+  className?: string;  // Top-level className for use outside {{#services}} block
   customTypes: CustomTypeView[];
   enums: EnumView[];
   services: ServiceView[];
@@ -385,10 +389,12 @@ export abstract class ServiceRenderer {
     
     return {
       methodName: method.name,
+      methodNamePascal: this.toPascalCase(method.name),
       documentation: method.documentation,
       documentationLines: docLines,
       hasDocumentation: method.documentation.length > 0,
       hasParams: params.length > 0,
+      parameterCount: params.length,
       parameters: params,
       returnType: method.returnType ? this.transformer.convert(method.returnType) : 'Void',
       existingImplementation,
@@ -513,6 +519,19 @@ export class SwiftRenderer extends ServiceRenderer {
     return this.render(module, 'service.mustache', existingImplementations);
   }
   
+  /**
+   * Render Types extension file with Params structs
+   */
+  renderTypesExtension(module: ServiceModule): string {
+    const templatePath = path.join(this.templateDir, 'swift-params.mustache');
+    const template = fs.readFileSync(templatePath, 'utf-8');
+    
+    // Build view with allMethods for types
+    const view = this.buildView(module);
+    
+    return Mustache.render(template, view);
+  }
+  
   protected buildView(
     module: ServiceModule,
     existingImplementations?: Map<string, string>
@@ -520,10 +539,14 @@ export class SwiftRenderer extends ServiceRenderer {
     const syncMethods: MethodView[] = [];
     const asyncMethods: MethodView[] = [];
     const voidMethods: MethodView[] = [];
+    const allMethods: MethodView[] = [];
     
     for (const method of module.methods) {
       const existing = existingImplementations?.get(method.name);
       const view = this.buildMethodView(method, existing);
+      
+      // Add to allMethods for params generation
+      allMethods.push(view);
       
       if (method.returnType === null || isVoidType(method.returnType)) {
         voidMethods.push(view);
@@ -541,6 +564,7 @@ export class SwiftRenderer extends ServiceRenderer {
       sourceFile: 'services.ts',
       timestamp: new Date().toISOString(),
       imports: ['NativeRPCKit'],
+      className,  // Top-level className for header comments
       customTypes: module.customTypes.map(t => this.buildCustomTypeView(t, t.fields)),
       enums: module.enums.map(e => this.buildEnumView(e)),
       services: [{
@@ -553,6 +577,7 @@ export class SwiftRenderer extends ServiceRenderer {
         syncMethods,
         asyncMethods,
         voidMethods,
+        allMethods,
         events,
       }],
     };
@@ -612,10 +637,13 @@ export class KotlinRenderer extends ServiceRenderer {
     const syncMethods: MethodView[] = [];
     const asyncMethods: MethodView[] = [];
     const voidMethods: MethodView[] = [];
+    const allMethods: MethodView[] = [];
     
     for (const method of module.methods) {
       const existing = existingImplementations?.get(method.name);
-      const view = this.buildMethodView(method, existing);
+      const view = this.buildKotlinMethodView(method, existing);
+      
+      allMethods.push(view);
       
       if (method.returnType === null || isVoidType(method.returnType)) {
         voidMethods.push(view);
@@ -639,6 +667,7 @@ export class KotlinRenderer extends ServiceRenderer {
         'com.itoken.team.nativerpc.dsl.serviceDefinition',
       ],
       packageName: this.packageName,
+      className,
       customTypes: module.customTypes.map(t => this.buildCustomTypeView(t, t.fields)),
       enums: module.enums.map(e => this.buildEnumView(e)),
       services: [{
@@ -651,9 +680,21 @@ export class KotlinRenderer extends ServiceRenderer {
         syncMethods,
         asyncMethods,
         voidMethods,
+        allMethods,
         events,
       }],
     };
+  }
+  
+  /**
+   * Build Kotlin method view (now uses same pattern as Swift with Params types)
+   */
+  private buildKotlinMethodView(
+    method: ServiceMethod,
+    existingImplementation?: string
+  ): MethodView {
+    // Now that we use Codable-style params, we can just use the base method view
+    return this.buildMethodView(method, existingImplementation);
   }
   
   protected loadPartials(): Record<string, string> {
@@ -680,10 +721,13 @@ export class DartRenderer extends ServiceRenderer {
     const syncMethods: MethodView[] = [];
     const asyncMethods: MethodView[] = [];
     const voidMethods: MethodView[] = [];
+    const allMethods: MethodView[] = [];
     
     // All methods are async in Dart (calling native)
     for (const method of module.methods) {
       const view = this.buildMethodView(method);
+      
+      allMethods.push(view);
       
       if (method.returnType === null || isVoidType(method.returnType)) {
         voidMethods.push(view);
@@ -711,6 +755,7 @@ export class DartRenderer extends ServiceRenderer {
         syncMethods,
         asyncMethods,
         voidMethods,
+        allMethods,
         events,
       }],
     };
@@ -740,10 +785,13 @@ export class TypeScriptRenderer extends ServiceRenderer {
     const syncMethods: MethodView[] = [];
     const asyncMethods: MethodView[] = [];
     const voidMethods: MethodView[] = [];
+    const allMethods: MethodView[] = [];
     
     // All methods are async in TypeScript client (calling native)
     for (const method of module.methods) {
       const view = this.buildMethodView(method);
+      
+      allMethods.push(view);
       
       if (method.returnType === null || isVoidType(method.returnType)) {
         voidMethods.push(view);
@@ -771,6 +819,7 @@ export class TypeScriptRenderer extends ServiceRenderer {
         syncMethods,
         asyncMethods,
         voidMethods,
+        allMethods,
         events,
       }],
     };

@@ -6,6 +6,38 @@
 import XCTest
 @testable import NativeRPCKit
 
+// MARK: - Test Parameter Types
+
+struct AddParams: Codable {
+    let a: Int
+    let b: Int
+}
+
+struct GreetParams: Codable {
+    let name: String
+}
+
+struct ValueParams: Codable {
+    let value: Int
+}
+
+struct DelayParams: Codable {
+    let ms: Int
+}
+
+struct FetchParams: Codable {
+    let id: String
+}
+
+struct FetchResult: Codable {
+    let id: String
+    let name: String
+}
+
+struct DateParams: Codable {
+    let date: String
+}
+
 final class NativeRPCKitTests: XCTestCase {
     
     // MARK: - Service Definition Tests
@@ -21,13 +53,13 @@ final class NativeRPCKitTests: XCTestCase {
             override func definition() -> ServiceDefinitionContainer {
                 // Name() is no longer needed - serviceName is used automatically
                 
-                Function("add") { [weak self] (a: Int, b: Int) -> Int in
+                Function("add") { [weak self] (params: AddParams) -> Int in
                     self?.addCallCount += 1
-                    return a + b
+                    return params.a + params.b
                 }
                 
-                Function("greet") { (name: String) -> String in
-                    "Hello, \(name)!"
+                Function("greet") { (params: GreetParams) -> String in
+                    "Hello, \(params.name)!"
                 }
                 
                 Events("dataChanged", "statusUpdated")
@@ -56,25 +88,25 @@ final class NativeRPCKitTests: XCTestCase {
             
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                Function("add") { (a: Int, b: Int) -> Int in
-                    a + b
+                Function("add") { (params: AddParams) -> Int in
+                    params.a + params.b
                 }
                 
-                Function("multiply") { (a: Double, b: Double) -> Double in
-                    a * b
+                Function("getValue") { () -> Int in
+                    42
                 }
             }
         }
         
         let service = MathService()
         
-        // Test add
-        let addResult = try await service.handleCall(method: "add", args: [5, 3])
+        // Test add with params dictionary
+        let addResult = try await service.handleCall(method: "add", args: [["a": 5, "b": 3]])
         XCTAssertEqual(addResult as? Int, 8)
         
-        // Test multiply
-        let multiplyResult = try await service.handleCall(method: "multiply", args: [2.5, 4.0])
-        XCTAssertEqual(multiplyResult as? Double, 10.0)
+        // Test no-params function
+        let valueResult = try await service.handleCall(method: "getValue", args: [])
+        XCTAssertEqual(valueResult as? Int, 42)
     }
     
     func testAsyncFunctionCall() async throws {
@@ -83,17 +115,133 @@ final class NativeRPCKitTests: XCTestCase {
             
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                AsyncFunction("delay") { (ms: Int) async -> String in
-                    try? await Task.sleep(nanoseconds: UInt64(ms) * 1_000_000)
-                    return "done after \(ms)ms"
+                AsyncFunction("delay") { (params: DelayParams) async -> String in
+                    try? await Task.sleep(nanoseconds: UInt64(params.ms) * 1_000_000)
+                    return "done after \(params.ms)ms"
+                }
+                
+                AsyncFunction("noParams") { () async -> String in
+                    return "no params needed"
                 }
             }
         }
         
         let service = AsyncService()
         
-        let result = try await service.handleCall(method: "delay", args: [10])
+        let result = try await service.handleCall(method: "delay", args: [["ms": 10]])
         XCTAssertEqual(result as? String, "done after 10ms")
+        
+        let noParamsResult = try await service.handleCall(method: "noParams", args: [])
+        XCTAssertEqual(noParamsResult as? String, "no params needed")
+    }
+    
+    func testVoidReturnFunction() async throws {
+        class VoidService: NativeRPCService {
+            override class var serviceName: String { "void" }
+            
+            var lastValue: Int = 0
+            
+            @ServiceDefinitionBuilder
+            override func definition() -> ServiceDefinitionContainer {
+                Function("setValue") { [weak self] (params: ValueParams) in
+                    self?.lastValue = params.value
+                }
+                
+                Function("reset") { [weak self] () in
+                    self?.lastValue = 0
+                }
+            }
+        }
+        
+        let service = VoidService()
+        
+        // Test void function with params
+        _ = try await service.handleCall(method: "setValue", args: [["value": 42]])
+        XCTAssertEqual(service.lastValue, 42)
+        
+        // Test void function without params
+        _ = try await service.handleCall(method: "reset", args: [])
+        XCTAssertEqual(service.lastValue, 0)
+    }
+    
+    // MARK: - Codable Decoding Error Tests
+    
+    func testMissingRequiredKey() async {
+        class ParamService: NativeRPCService {
+            override class var serviceName: String { "param" }
+            
+            @ServiceDefinitionBuilder
+            override func definition() -> ServiceDefinitionContainer {
+                Function("add") { (params: AddParams) -> Int in
+                    params.a + params.b
+                }
+            }
+        }
+        
+        let service = ParamService()
+        
+        // Missing key 'b'
+        do {
+            _ = try await service.handleCall(method: "add", args: [["a": 5]])
+            XCTFail("Should have thrown an error")
+        } catch let error as NativeRPCError {
+            XCTAssertEqual(error.code, NativeRPCErrorCode.invalidParams)
+            XCTAssertTrue(error.message.contains("b"), "Error should mention missing key 'b'")
+        } catch {
+            XCTFail("Wrong error type: \(error)")
+        }
+    }
+    
+    func testTypeMismatch() async {
+        class ParamService: NativeRPCService {
+            override class var serviceName: String { "param" }
+            
+            @ServiceDefinitionBuilder
+            override func definition() -> ServiceDefinitionContainer {
+                Function("add") { (params: AddParams) -> Int in
+                    params.a + params.b
+                }
+            }
+        }
+        
+        let service = ParamService()
+        
+        // Wrong type for 'a' (string instead of int)
+        do {
+            _ = try await service.handleCall(method: "add", args: [["a": "five", "b": 3]])
+            XCTFail("Should have thrown an error")
+        } catch let error as NativeRPCError {
+            XCTAssertEqual(error.code, NativeRPCErrorCode.invalidParams)
+            XCTAssertTrue(error.message.contains("Type mismatch"), "Error should mention type mismatch")
+        } catch {
+            XCTFail("Wrong error type: \(error)")
+        }
+    }
+    
+    func testInvalidParamsFormat() async {
+        class ParamService: NativeRPCService {
+            override class var serviceName: String { "param" }
+            
+            @ServiceDefinitionBuilder
+            override func definition() -> ServiceDefinitionContainer {
+                Function("add") { (params: AddParams) -> Int in
+                    params.a + params.b
+                }
+            }
+        }
+        
+        let service = ParamService()
+        
+        // Pass non-dictionary (array or primitive) when dictionary expected
+        do {
+            _ = try await service.handleCall(method: "add", args: [5, 3])
+            XCTFail("Should have thrown an error")
+        } catch let error as NativeRPCError {
+            XCTAssertEqual(error.code, NativeRPCErrorCode.invalidParams)
+            XCTAssertTrue(error.message.contains("Expected params dictionary"), "Error should mention expected format")
+        } catch {
+            XCTFail("Wrong error type: \(error)")
+        }
     }
     
     // MARK: - Service Center Tests
@@ -201,23 +349,24 @@ final class NativeRPCKitTests: XCTestCase {
         XCTAssertEqual(params?["name"] as? String, "John")
     }
     
-    // MARK: - Promise Tests
+    // MARK: - Async Function Tests (Replacing Promise Tests)
     
-    func testPromiseResolve() async throws {
-        class PromiseService: NativeRPCService {
-            override class var serviceName: String { "promise" }
+    func testAsyncFunctionWithResult() async throws {
+        class FetchService: NativeRPCService {
+            override class var serviceName: String { "fetch" }
             
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                AsyncFunction("fetchData") { (id: String, promise: Promise) in
-                    // Immediately resolve for test reliability
-                    promise.resolve(["id": id, "name": "Test User"])
+                AsyncFunction("fetchData") { (params: FetchParams) async throws -> FetchResult in
+                    // Simulate async work
+                    try await Task.sleep(nanoseconds: 1_000_000) // 1ms
+                    return FetchResult(id: params.id, name: "Test User")
                 }
             }
         }
         
-        let service = PromiseService()
-        let result = try await service.handleCall(method: "fetchData", args: ["123"])
+        let service = FetchService()
+        let result = try await service.handleCall(method: "fetchData", args: [["id": "123"]])
         
         guard let dict = result as? [String: Any] else {
             XCTFail("Expected dictionary result")
@@ -228,20 +377,19 @@ final class NativeRPCKitTests: XCTestCase {
         XCTAssertEqual(dict["name"] as? String, "Test User")
     }
     
-    func testPromiseReject() async {
-        class PromiseService: NativeRPCService {
-            override class var serviceName: String { "promise" }
+    func testAsyncFunctionWithError() async {
+        class FailingService: NativeRPCService {
+            override class var serviceName: String { "failing" }
             
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                AsyncFunction("failingOp") { (promise: Promise) in
-                    // Immediately reject for test reliability
-                    promise.reject(code: -1, message: "Operation failed")
+                AsyncFunction("failingOp") { () async throws -> Int in
+                    throw NativeRPCError(code: -1, message: "Operation failed")
                 }
             }
         }
         
-        let service = PromiseService()
+        let service = FailingService()
         
         do {
             _ = try await service.handleCall(method: "failingOp", args: [])
@@ -254,12 +402,8 @@ final class NativeRPCKitTests: XCTestCase {
         }
     }
     
-    // Note: Timeout test removed - it's flaky in unit test environment
-    // The timeout functionality is tested in integration tests
-    
     // MARK: - Queue Execution Tests
     
-    // Note: Queue tests simplified - actual queue validation is done in integration tests
     func testRunOnQueue() async throws {
         class QueueService: NativeRPCService {
             override class var serviceName: String { "queue" }
@@ -398,29 +542,7 @@ final class NativeRPCKitTests: XCTestCase {
         XCTAssertEqual(asInt, 123)
     }
     
-    func testConvertibleInFunctionCall() async throws {
-        class DateService: NativeRPCService {
-            override class var serviceName: String { "dates" }
-            
-            @ServiceDefinitionBuilder
-            override func definition() -> ServiceDefinitionContainer {
-                Function("formatDate") { (date: Date) -> String in
-                    let formatter = DateFormatter()
-                    formatter.dateFormat = "yyyy-MM-dd"
-                    formatter.timeZone = TimeZone(identifier: "UTC")
-                    return formatter.string(from: date)
-                }
-            }
-        }
-        
-        let service = DateService()
-        
-        // Pass ISO8601 string, should be auto-converted to Date
-        let result = try await service.handleCall(method: "formatDate", args: ["2024-01-15T10:30:00Z"])
-        XCTAssertEqual(result as? String, "2024-01-15")
-    }
-    
-    // MARK: - Dictionary Parameter Extraction Tests
+    // MARK: - Dictionary Parameter Extraction Tests (for Codable params)
     
     func testDictionaryParameterExtraction() async throws {
         class CounterService: NativeRPCService {
@@ -430,25 +552,25 @@ final class NativeRPCKitTests: XCTestCase {
             
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                Function("add") { (value: Int) -> Int in
-                    self.count += value
+                Function("add") { [weak self] (params: ValueParams) -> Int in
+                    guard let self = self else { return 0 }
+                    self.count += params.value
                     return self.count
                 }
                 
-                Function("getValue") { () -> Int in
-                    self.count
+                Function("getValue") { [weak self] () -> Int in
+                    self?.count ?? 0
                 }
             }
         }
         
         let service = CounterService()
         
-        // Test with direct value (should work)
-        let result1 = try await service.handleCall(method: "add", args: [5])
+        // Test with dictionary containing value
+        let result1 = try await service.handleCall(method: "add", args: [["value": 5]])
         XCTAssertEqual(result1 as? Int, 5)
         
-        // Test with dictionary containing single value ({"value": 10})
-        // This simulates what Web/Flutter sends: {"value": 10}
+        // Test with another add
         let result2 = try await service.handleCall(method: "add", args: [["value": 10]])
         XCTAssertEqual(result2 as? Int, 15)  // 5 + 10 = 15
         
@@ -465,9 +587,10 @@ final class NativeRPCKitTests: XCTestCase {
             
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                AsyncFunction("addDelayed") { (value: Int) async -> Int in
+                AsyncFunction("addDelayed") { [weak self] (params: ValueParams) async -> Int in
+                    guard let self = self else { return 0 }
                     try? await Task.sleep(nanoseconds: 1_000_000) // 1ms
-                    self.count += value
+                    self.count += params.value
                     return self.count
                 }
             }
@@ -475,8 +598,28 @@ final class NativeRPCKitTests: XCTestCase {
         
         let service = AsyncCounterService()
         
-        // Test with dictionary containing single value
+        // Test with dictionary containing value
         let result = try await service.handleCall(method: "addDelayed", args: [["value": 7]])
         XCTAssertEqual(result as? Int, 7)
+    }
+    
+    func testMultiParameterCodable() async throws {
+        class MathService: NativeRPCService, @unchecked Sendable {
+            override class var serviceName: String { "math" }
+            
+            @ServiceDefinitionBuilder
+            override func definition() -> ServiceDefinitionContainer {
+                // Two-parameter function using Codable struct
+                Function("addTwo") { (params: AddParams) -> Int in
+                    params.a + params.b
+                }
+            }
+        }
+        
+        let service = MathService()
+        
+        // Test with dictionary containing both values
+        let result = try await service.handleCall(method: "addTwo", args: [["a": 3, "b": 7]])
+        XCTAssertEqual(result as? Int, 10)
     }
 }

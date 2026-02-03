@@ -225,12 +225,24 @@ export class NativeRPCCodeGenerator {
         ? path.join(swiftConfig.existingServicePath, fileName)
         : undefined;
       
+      // Generate main service file
       const content = renderer.renderWithMerge(module, existingPath);
       const filePath = path.join(swiftConfig.outputPath, fileName);
       
       files.push({
         path: filePath,
         content,
+        language: 'swift',
+      });
+      
+      // Generate Types extension file with Params structs
+      const typesContent = renderer.renderTypesExtension(module);
+      const typesFileName = `${className}+Types.swift`;
+      const typesFilePath = path.join(swiftConfig.outputPath, typesFileName);
+      
+      files.push({
+        path: typesFilePath,
+        content: typesContent,
         language: 'swift',
       });
     }
