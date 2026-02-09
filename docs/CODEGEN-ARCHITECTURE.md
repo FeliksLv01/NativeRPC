@@ -702,4 +702,4 @@ codegen/
 - **Main SDK**: `../sdk/` - iOS and Android SDK implementations
 - **Flutter Connection**: `../connections/flutter/` - Flutter plugin
 - **Protocol Docs**: `./ARCHITECTURE.md` - Overall NativeRPC architecture
-- **Inspiration**: [nicklockwood/ts-gyb](https://github.com/nicklockwood/ts-gyb)
+- **Inspiration**: [microsoft/ts-gyb](https://github.com/microsoft/ts-gyb)

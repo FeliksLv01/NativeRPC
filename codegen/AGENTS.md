@@ -509,7 +509,7 @@ Specify custom template path in configuration:
 - **Main SDK**: `../sdk/`
 - **Flutter Connection**: `../connections/flutter/`
 - **Architecture Docs**: `../docs/CODEGEN-ARCHITECTURE.md`
-- **Inspiration**: [ts-gyb](https://github.com/nicklockwood/ts-gyb)
+- **Inspiration**: [ts-gyb](https://github.com/microsoft/ts-gyb)
 
 ---
 

@@ -702,4 +702,4 @@ codegen/
 - **主 SDK**: `../sdk/` - iOS 和 Android SDK 实现
 - **Flutter 连接**: `../connections/flutter/` - Flutter 插件
 - **协议文档**: `./ARCHITECTURE.md` - NativeRPC 整体架构
-- **灵感来源**: [nicklockwood/ts-gyb](https://github.com/nicklockwood/ts-gyb)
+- **灵感来源**: [microsoft/ts-gyb](https://github.com/microsoft/ts-gyb)
