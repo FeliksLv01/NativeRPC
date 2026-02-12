@@ -92,8 +92,6 @@ open class NativeRPCConnection: @unchecked Sendable {
         let newStub = NativeRPCStub(context: ctx)
         newStub.delegate = self
         self.stub = newStub
-        
-        print("[NativeRPC] Connection created: \(id) (\(connectionType.rawValue))")
     }
     
     /// Create a connection with custom type name.
@@ -173,8 +171,6 @@ open class NativeRPCConnection: @unchecked Sendable {
         
         // Clear context
         context = nil
-        
-        print("[NativeRPC] Connection closed: \(id)")
     }
     
     // MARK: - App Lifecycle

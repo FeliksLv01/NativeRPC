@@ -10,6 +10,7 @@ NativeRPC is a **protocol-first RPC framework** with standalone native SDKs for 
 - **Declarative DSL**: Expo Modules-inspired API for Swift and Kotlin services
 - **Type-Safe Code Generation**: Generate Dart/Swift/Kotlin clients from TypeScript interfaces
 - **Single Channel Design**: All RPC calls share one connection per host
+- **Interceptor Middleware**: Pluggable middleware for logging, monitoring, and custom processing
 
 ## Installation
 
@@ -227,6 +228,55 @@ host.register(CounterService())
 
 val connection = MyWebSocketConnection()
 host.addConnection(connection)
+```
+
+## Logging & Interceptors (iOS)
+
+NativeRPC provides a middleware system for logging, monitoring, and custom processing. By default, the SDK produces no log output.
+
+### Enable Logging
+
+```swift
+import NativeRPCKit
+
+// Use built-in logging interceptor
+NativeRPCServiceCenter.shared.addInterceptor(
+    NativeRPCLoggingInterceptor(logLevel: .info)
+)
+```
+
+### Custom OSLog Integration
+
+```swift
+import NativeRPCKit
+import os.log
+
+final class OSLogInterceptor: NativeRPCInterceptor {
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.app.NativeRPC",
+        category: "NativeRPC"
+    )
+    
+    func willProcessRequest(_ request: NativeRPCRequestInfo, context: NativeRPCInterceptorContext) {
+        logger.info("→ \(request.method)")
+    }
+    
+    func didProcessRequest(_ response: NativeRPCResponseInfo, for request: NativeRPCRequestInfo, context: NativeRPCInterceptorContext) {
+        let durationMs = String(format: "%.2f", response.duration * 1000)
+        if response.isSuccess {
+            logger.info("← \(request.method) ✓ (\(durationMs)ms)")
+        } else if let error = response.error {
+            logger.error("← \(request.method) ✗ [\(error.code)] \(error.message)")
+        }
+    }
+    
+    func willSendEvent(_ event: NativeRPCEventInfo, context: NativeRPCInterceptorContext) {
+        logger.info("⇢ \(event.event)")
+    }
+}
+
+// Add to service center
+NativeRPCServiceCenter.shared.addInterceptor(OSLogInterceptor())
 ```
 
 ## Code Generation

@@ -52,6 +52,7 @@ NativeRPC uses a **simplified JSON-RPC 2.0** protocol:
   - `NativeRPCService` - Base class for all services
   - `NativeRPCMessage` - Message types and parser
   - `NativeRPCError` - Error types and codes
+  - `NativeRPCInterceptor` - Middleware system for logging, monitoring, etc.
   - `Promise` - Callback-style async functions
   - `Convertible` - Automatic type conversion from JSON
 - **DSL/**: `ServiceDefinitionBuilder`, `ServiceDefinition`, `DSLFactories`
@@ -63,7 +64,7 @@ NativeRPC uses a **simplified JSON-RPC 2.0** protocol:
   - Auto-creates context and stub
 
 ### Tests/
-- Swift Package unit tests (21 tests)
+- Swift Package unit tests (27 tests)
 
 ## Swift Package Structure
 
@@ -283,6 +284,90 @@ if let controller = window?.rootViewController as? FlutterViewController {
 }
 ```
 
+### Interceptors (Middleware)
+
+The SDK supports a middleware system similar to Alamofire's interceptors for logging, monitoring, and custom processing.
+
+#### Built-in Logging Interceptor
+
+```swift
+import NativeRPCKit
+
+// Add logging with default settings
+NativeRPCServiceCenter.shared.addInterceptor(
+    NativeRPCLoggingInterceptor(logLevel: .info)
+)
+
+// Or with verbose logging
+let logger = NativeRPCLoggingInterceptor(logLevel: .verbose, prefix: "[MyApp RPC]")
+NativeRPCServiceCenter.shared.addInterceptor(logger)
+```
+
+#### Custom OSLog Interceptor
+
+```swift
+import NativeRPCKit
+import os.log
+
+final class OSLogInterceptor: NativeRPCInterceptor {
+    private let logger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.app.NativeRPC",
+        category: "NativeRPC"
+    )
+    
+    func willProcessRequest(_ request: NativeRPCRequestInfo, context: NativeRPCInterceptorContext) {
+        logger.info("→ \(request.method)")
+    }
+    
+    func didProcessRequest(_ response: NativeRPCResponseInfo, for request: NativeRPCRequestInfo, context: NativeRPCInterceptorContext) {
+        let durationMs = String(format: "%.2f", response.duration * 1000)
+        if response.isSuccess {
+            logger.info("← \(request.method) ✓ (\(durationMs)ms)")
+        } else if let error = response.error {
+            logger.error("← \(request.method) ✗ [\(error.code)] \(error.message)")
+        }
+    }
+    
+    func willSendEvent(_ event: NativeRPCEventInfo, context: NativeRPCInterceptorContext) {
+        logger.info("⇢ \(event.event)")
+    }
+}
+
+// Usage
+NativeRPCServiceCenter.shared.addInterceptor(OSLogInterceptor())
+```
+
+#### Custom Metrics Interceptor
+
+```swift
+final class MetricsInterceptor: NativeRPCInterceptor {
+    func didProcessRequest(_ response: NativeRPCResponseInfo, for request: NativeRPCRequestInfo, context: NativeRPCInterceptorContext) {
+        // Report to your analytics system
+        Analytics.track("rpc_call", [
+            "method": request.method,
+            "duration_ms": response.duration * 1000,
+            "success": response.isSuccess,
+            "connection_type": context.connectionType.rawValue
+        ])
+    }
+}
+```
+
+#### Interceptor Protocol Methods
+
+| Method | When Called |
+|--------|-------------|
+| `willProcessRequest` | Before processing incoming request |
+| `didProcessRequest` | After processing, with response and duration |
+| `willSendEvent` | Before sending event to client |
+| `didSendEvent` | After sending event to client |
+| `willSendMessage` | Before sending any outgoing message (response or event) |
+| `didSendMessage` | After sending any outgoing message (response or event) |
+| `didConnect` | When connection is established |
+| `didDisconnect` | When connection is closed |
+| `didCreateService` | When service instance is created |
+| `didDestroyService` | When service instance is destroyed |
+
 ## Build and Test
 
 ### Build the SDK
@@ -325,6 +410,12 @@ swift test
 - Base class for connections
 - Auto-creates context and stub
 - Override `send()` for custom transports
+
+### NativeRPCInterceptor
+- Middleware protocol for intercepting RPC messages
+- `NativeRPCInterceptorChain` - Manages multiple interceptors
+- `NativeRPCLoggingInterceptor` - Built-in logging middleware
+- Supports request/response, events, and lifecycle hooks
 
 ### NativeRPCMessage
 - `NativeRPCMessageParser.parse()` - Parse incoming JSON-RPC messages

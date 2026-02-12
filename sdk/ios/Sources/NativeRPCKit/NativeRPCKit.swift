@@ -19,6 +19,9 @@
 // - NativeRPCServiceCenter.swift: NativeRPCServiceCenter, NativeRPCServiceRegistrable
 // - NativeRPCStub.swift: NativeRPCStub, NativeRPCStubDelegate
 // - NativeRPCContext.swift: NativeRPCContext, NativeRPCConnectionType
+// - NativeRPCInterceptor.swift: NativeRPCInterceptor, NativeRPCInterceptorChain, NativeRPCInterceptorContext,
+//                               NativeRPCRequestInfo, NativeRPCResponseInfo, NativeRPCEventInfo,
+//                               NativeRPCLoggingInterceptor
 
 // DSL/
 // - ServiceDefinition.swift: AnyDefinition, AnyServiceDefinitionElement, AnySyncFunction, AnyAsyncFunction, SyncFunctionDefinition, AsyncFunctionDefinition, ConstantDefinition, ServiceNameDefinition, EventsDefinition, EventObservingType, EventObservingDefinition, LifecycleType, LifecycleDefinition

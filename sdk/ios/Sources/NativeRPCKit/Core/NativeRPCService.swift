@@ -197,7 +197,7 @@ open class NativeRPCService: NativeRPCServiceProtocol, NativeRPCServiceRegistrab
         }
         
         guard let stub = stub else {
-            print("[NativeRPC] Warning: Cannot send event '\(name)' - service not attached to stub")
+            // Service not attached to stub - silently ignore
             return
         }
         
@@ -209,7 +209,7 @@ open class NativeRPCService: NativeRPCServiceProtocol, NativeRPCServiceRegistrab
         do {
             try sendEvent(name, data: data)
         } catch {
-            print("[NativeRPC] Error sending event '\(name)': \(error)")
+            // Event not declared - silently ignore in emit
         }
     }
     

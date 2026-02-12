@@ -67,6 +67,22 @@ public final class NativeRPCStub: @unchecked Sendable {
         return encoder
     }()
     
+    /// Connection ID for interceptors
+    private let connectionId: String
+    
+    /// Interceptor context for this connection
+    private var interceptorContext: NativeRPCInterceptorContext {
+        NativeRPCInterceptorContext(
+            connectionId: connectionId,
+            connectionType: context.connectionType
+        )
+    }
+    
+    /// Reference to global interceptors
+    private var interceptors: NativeRPCInterceptorChain {
+        NativeRPCServiceCenter.shared.interceptors
+    }
+    
     // MARK: - Initialization
     
     /// Create a new stub for a connection
@@ -74,6 +90,10 @@ public final class NativeRPCStub: @unchecked Sendable {
     /// - Parameter context: The context for this connection
     public init(context: NativeRPCContext) {
         self.context = context
+        self.connectionId = UUID().uuidString
+        
+        // Notify interceptors
+        interceptors.didConnect(context: interceptorContext)
     }
     
     // MARK: - Service Access
@@ -114,6 +134,7 @@ public final class NativeRPCStub: @unchecked Sendable {
         
         // Create the service instance
         var newService: NativeRPCService?
+        var wasCreated = false
         queue.sync(flags: .barrier) {
             // Double-check in case another thread created it
             if let existing = services[name] {
@@ -127,12 +148,17 @@ public final class NativeRPCStub: @unchecked Sendable {
                 service.stub = self
                 services[name] = service
                 newService = service
-                print("[NativeRPC] Created service instance: \(name)")
+                wasCreated = true
             }
         }
         
         guard let service = newService else {
             throw NativeRPCError.internalError("Failed to create service instance: \(name)")
+        }
+        
+        // Notify interceptors if service was just created
+        if wasCreated {
+            interceptors.didCreateService(name, context: interceptorContext)
         }
         
         return service
@@ -147,16 +173,44 @@ public final class NativeRPCStub: @unchecked Sendable {
         Task {
             do {
                 let message = try NativeRPCMessageParser.parse(data)
+                let startTime = Date()
                 
                 switch message {
                 case .call(let request):
-                    await handleCallRequest(request)
+                    let requestInfo = NativeRPCRequestInfo(
+                        id: request.id,
+                        method: request.method,
+                        service: request.service,
+                        methodName: request.methodName,
+                        type: .call,
+                        params: request.params
+                    )
+                    interceptors.willProcessRequest(requestInfo, context: interceptorContext)
+                    await handleCallRequest(request, requestInfo: requestInfo, startTime: startTime)
                     
                 case .subscribe(let request):
-                    handleSubscribe(request)
+                    let requestInfo = NativeRPCRequestInfo(
+                        id: request.id,
+                        method: request.event,
+                        service: request.service,
+                        methodName: request.eventName,
+                        type: .subscribe,
+                        params: nil
+                    )
+                    interceptors.willProcessRequest(requestInfo, context: interceptorContext)
+                    handleSubscribe(request, requestInfo: requestInfo, startTime: startTime)
                     
                 case .unsubscribe(let request):
-                    handleUnsubscribe(request)
+                    let requestInfo = NativeRPCRequestInfo(
+                        id: request.id,
+                        method: request.event,
+                        service: request.service,
+                        methodName: request.eventName,
+                        type: .unsubscribe,
+                        params: nil
+                    )
+                    interceptors.willProcessRequest(requestInfo, context: interceptorContext)
+                    handleUnsubscribe(request, requestInfo: requestInfo, startTime: startTime)
                 }
             } catch let error as NativeRPCError {
                 sendError(id: "unknown", error: error)
@@ -168,7 +222,7 @@ public final class NativeRPCStub: @unchecked Sendable {
     }
     
     /// Handle a call request
-    private func handleCallRequest(_ request: NativeRPCRequest) async {
+    private func handleCallRequest(_ request: NativeRPCRequest, requestInfo: NativeRPCRequestInfo, startTime: Date) async {
         let serviceName = request.service
         let methodName = request.methodName
         
@@ -177,17 +231,27 @@ public final class NativeRPCStub: @unchecked Sendable {
         do {
             service = try self.service(named: serviceName)
         } catch let error as NativeRPCError {
-            sendError(id: request.id, error: error)
+            let duration = Date().timeIntervalSince(startTime)
+            let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: error, duration: duration)
+            interceptors.didProcessRequest(responseInfo, for: requestInfo, context: interceptorContext)
+            sendError(id: request.id, error: error, responseInfo: responseInfo, requestInfo: requestInfo)
             return
         } catch {
-            sendError(id: request.id, error: NativeRPCError.internalError(error.localizedDescription))
+            let rpcError = NativeRPCError.internalError(error.localizedDescription)
+            let duration = Date().timeIntervalSince(startTime)
+            let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: rpcError, duration: duration)
+            interceptors.didProcessRequest(responseInfo, for: requestInfo, context: interceptorContext)
+            sendError(id: request.id, error: rpcError, responseInfo: responseInfo, requestInfo: requestInfo)
             return
         }
         
         // Check if method exists
         guard service.canHandle(method: methodName) else {
             let error = NativeRPCError.methodNotFound(methodName, service: serviceName)
-            sendError(id: request.id, error: error)
+            let duration = Date().timeIntervalSince(startTime)
+            let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: error, duration: duration)
+            interceptors.didProcessRequest(responseInfo, for: requestInfo, context: interceptorContext)
+            sendError(id: request.id, error: error, responseInfo: responseInfo, requestInfo: requestInfo)
             return
         }
         
@@ -197,20 +261,31 @@ public final class NativeRPCStub: @unchecked Sendable {
         do {
             // Call the method
             let result = try await service.handleCall(method: methodName, params: params)
+            let duration = Date().timeIntervalSince(startTime)
+            
+            // Notify interceptors
+            let responseInfo = NativeRPCResponseInfo.success(id: request.id, result: result, duration: duration)
+            interceptors.didProcessRequest(responseInfo, for: requestInfo, context: interceptorContext)
             
             // Send success response
             let response = NativeRPCResponse(id: request.id, result: result)
-            sendResponse(response)
+            sendResponse(response, responseInfo: responseInfo, requestInfo: requestInfo)
         } catch let error as NativeRPCError {
-            sendError(id: request.id, error: error)
+            let duration = Date().timeIntervalSince(startTime)
+            let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: error, duration: duration)
+            interceptors.didProcessRequest(responseInfo, for: requestInfo, context: interceptorContext)
+            sendError(id: request.id, error: error, responseInfo: responseInfo, requestInfo: requestInfo)
         } catch {
             let rpcError = NativeRPCError.internalError(error.localizedDescription)
-            sendError(id: request.id, error: rpcError)
+            let duration = Date().timeIntervalSince(startTime)
+            let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: rpcError, duration: duration)
+            interceptors.didProcessRequest(responseInfo, for: requestInfo, context: interceptorContext)
+            sendError(id: request.id, error: rpcError, responseInfo: responseInfo, requestInfo: requestInfo)
         }
     }
     
     /// Handle a subscribe request
-    private func handleSubscribe(_ request: NativeRPCSubscribeRequest) {
+    private func handleSubscribe(_ request: NativeRPCSubscribeRequest, requestInfo: NativeRPCRequestInfo, startTime: Date) {
         let serviceName = request.service
         let eventName = request.eventName
         let eventFullName = request.event
@@ -220,17 +295,27 @@ public final class NativeRPCStub: @unchecked Sendable {
         do {
             service = try self.service(named: serviceName)
         } catch let error as NativeRPCError {
-            sendError(id: request.id, error: error)
+            let duration = Date().timeIntervalSince(startTime)
+            let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: error, duration: duration)
+            interceptors.didProcessRequest(responseInfo, for: requestInfo, context: interceptorContext)
+            sendError(id: request.id, error: error, responseInfo: responseInfo, requestInfo: requestInfo)
             return
         } catch {
-            sendError(id: request.id, error: NativeRPCError.internalError(error.localizedDescription))
+            let rpcError = NativeRPCError.internalError(error.localizedDescription)
+            let duration = Date().timeIntervalSince(startTime)
+            let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: rpcError, duration: duration)
+            interceptors.didProcessRequest(responseInfo, for: requestInfo, context: interceptorContext)
+            sendError(id: request.id, error: rpcError, responseInfo: responseInfo, requestInfo: requestInfo)
             return
         }
         
         // Validate event is declared
         guard service.definitionContainer.hasEvent(eventName) else {
             let error = NativeRPCError.eventNotDeclared(eventName, service: serviceName)
-            sendError(id: request.id, error: error)
+            let duration = Date().timeIntervalSince(startTime)
+            let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: error, duration: duration)
+            interceptors.didProcessRequest(responseInfo, for: requestInfo, context: interceptorContext)
+            sendError(id: request.id, error: error, responseInfo: responseInfo, requestInfo: requestInfo)
             return
         }
         
@@ -247,14 +332,19 @@ public final class NativeRPCStub: @unchecked Sendable {
                 service.onStartObserving(event: eventName)
             }
             
+            // Notify interceptors
+            let duration = Date().timeIntervalSince(startTime)
+            let responseInfo = NativeRPCResponseInfo.success(id: request.id, result: true, duration: duration)
+            self.interceptors.didProcessRequest(responseInfo, for: requestInfo, context: self.interceptorContext)
+            
             // Send success response
             let response = NativeRPCResponse(id: request.id, result: true)
-            self.sendResponse(response)
+            self.sendResponse(response, responseInfo: responseInfo, requestInfo: requestInfo)
         }
     }
     
     /// Handle an unsubscribe request
-    private func handleUnsubscribe(_ request: NativeRPCUnsubscribeRequest) {
+    private func handleUnsubscribe(_ request: NativeRPCUnsubscribeRequest, requestInfo: NativeRPCRequestInfo, startTime: Date) {
         let serviceName = request.service
         let eventName = request.eventName
         let eventFullName = request.event
@@ -274,9 +364,14 @@ public final class NativeRPCStub: @unchecked Sendable {
                 service.onStopObserving(event: eventName)
             }
             
+            // Notify interceptors
+            let duration = Date().timeIntervalSince(startTime)
+            let responseInfo = NativeRPCResponseInfo.success(id: request.id, result: true, duration: duration)
+            self.interceptors.didProcessRequest(responseInfo, for: requestInfo, context: self.interceptorContext)
+            
             // Send success response
             let response = NativeRPCResponse(id: request.id, result: true)
-            self.sendResponse(response)
+            self.sendResponse(response, responseInfo: responseInfo, requestInfo: requestInfo)
         }
     }
     
@@ -299,14 +394,35 @@ public final class NativeRPCStub: @unchecked Sendable {
                 return
             }
             
+            // Parse service and event name
+            let parts = eventFullName.split(separator: ".")
+            let serviceName = parts.count >= 2 ? parts.dropLast().joined(separator: ".") : eventFullName
+            let eventName = parts.last.map(String.init) ?? eventFullName
+            
+            // Create event info for interceptors
+            let eventInfo = NativeRPCEventInfo(
+                event: eventFullName,
+                service: serviceName,
+                eventName: eventName,
+                params: notification.params?.value
+            )
+            
+            // Notify interceptors before sending
+            self.interceptors.willSendEvent(eventInfo, context: self.interceptorContext)
+            let outgoingMessage = NativeRPCOutgoingMessage.event(eventInfo)
+            self.interceptors.willSendMessage(outgoingMessage, context: self.interceptorContext)
+            
             // Encode and send
             guard let data = try? self.encoder.encode(notification),
                   let jsonString = String(data: data, encoding: .utf8) else {
-                print("[NativeRPC] Failed to encode notification: \(eventFullName)")
                 return
             }
             
             self.delegate?.sendMessage(jsonString)
+            
+            // Notify interceptors after sending
+            self.interceptors.didSendEvent(eventInfo, context: self.interceptorContext)
+            self.interceptors.didSendMessage(outgoingMessage, context: self.interceptorContext)
         }
     }
     
@@ -318,23 +434,45 @@ public final class NativeRPCStub: @unchecked Sendable {
     
     // MARK: - Response Helpers
     
-    private func sendResponse(_ response: NativeRPCResponse) {
+    private func sendResponse(_ response: NativeRPCResponse, responseInfo: NativeRPCResponseInfo? = nil, requestInfo: NativeRPCRequestInfo? = nil) {
+        // Notify interceptors before sending
+        if let responseInfo = responseInfo, let requestInfo = requestInfo {
+            let outgoingMessage = NativeRPCOutgoingMessage.response(responseInfo, request: requestInfo)
+            interceptors.willSendMessage(outgoingMessage, context: interceptorContext)
+        }
+        
         guard let data = try? encoder.encode(response),
               let jsonString = String(data: data, encoding: .utf8) else {
-            print("[NativeRPC] Failed to encode response")
             return
         }
         delegate?.sendMessage(jsonString)
+        
+        // Notify interceptors after sending
+        if let responseInfo = responseInfo, let requestInfo = requestInfo {
+            let outgoingMessage = NativeRPCOutgoingMessage.response(responseInfo, request: requestInfo)
+            interceptors.didSendMessage(outgoingMessage, context: interceptorContext)
+        }
     }
     
-    private func sendError(id: String, error: NativeRPCError) {
+    private func sendError(id: String, error: NativeRPCError, responseInfo: NativeRPCResponseInfo? = nil, requestInfo: NativeRPCRequestInfo? = nil) {
+        // Notify interceptors before sending
+        if let responseInfo = responseInfo, let requestInfo = requestInfo {
+            let outgoingMessage = NativeRPCOutgoingMessage.response(responseInfo, request: requestInfo)
+            interceptors.willSendMessage(outgoingMessage, context: interceptorContext)
+        }
+        
         let response = NativeRPCErrorResponse(id: id, error: error)
         guard let data = try? encoder.encode(response),
               let jsonString = String(data: data, encoding: .utf8) else {
-            print("[NativeRPC] Failed to encode error response")
             return
         }
         delegate?.sendMessage(jsonString)
+        
+        // Notify interceptors after sending
+        if let responseInfo = responseInfo, let requestInfo = requestInfo {
+            let outgoingMessage = NativeRPCOutgoingMessage.response(responseInfo, request: requestInfo)
+            interceptors.didSendMessage(outgoingMessage, context: interceptorContext)
+        }
     }
     
     // MARK: - Lifecycle
@@ -361,13 +499,16 @@ public final class NativeRPCStub: @unchecked Sendable {
     ///
     /// Call this when the connection closes.
     public func shutdown() {
+        // Capture context before async to avoid race
+        let ctx = interceptorContext
+        
         queue.async(flags: .barrier) { [weak self] in
             guard let self = self else { return }
             
-            // Destroy all services
+            // Destroy all services and notify interceptors
             for (name, service) in self.services {
                 service.destroy()
-                print("[NativeRPC] Destroyed service: \(name)")
+                self.interceptors.didDestroyService(name, context: ctx)
             }
             self.services.removeAll()
             
@@ -377,7 +518,8 @@ public final class NativeRPCStub: @unchecked Sendable {
             // Clear context storage
             self.context.clearStorage()
             
-            print("[NativeRPC] Stub shutdown complete")
+            // Notify interceptors of disconnect
+            self.interceptors.didDisconnect(context: ctx)
         }
     }
     

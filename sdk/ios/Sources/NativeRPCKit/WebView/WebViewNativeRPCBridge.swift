@@ -200,10 +200,8 @@ public final class WebViewNativeRPCConnection: NativeRPCConnection, @unchecked S
         """
         
         DispatchQueue.main.async { [weak webView] in
-            webView?.evaluateJavaScript(script) { _, error in
-                if let error = error {
-                    print("[NativeRPC WebView] Failed to dispatch ready event: \(error)")
-                }
+            webView?.evaluateJavaScript(script) { _, _ in
+                // Ignore errors - bridge may not be fully initialized
             }
         }
     }
@@ -231,7 +229,7 @@ public final class WebViewNativeRPCConnection: NativeRPCConnection, @unchecked S
         DispatchQueue.main.async { [weak self] in
             self?.webView?.evaluateJavaScript(script) { _, error in
                 if let error = error {
-                    print("[NativeRPC WebView] JS eval error: \(error)")
+                    self?.log("JS eval error: \(error)")
                 }
             }
         }
@@ -349,7 +347,7 @@ private final class WebViewMessageHandler: NSObject, WKScriptMessageHandler {
         didReceive message: WKScriptMessage
     ) {
         guard let jsonString = message.body as? String else {
-            print("[NativeRPC WebView] Invalid message body type: \(type(of: message.body))")
+            // Invalid message body type - ignore
             return
         }
         onMessage(jsonString)

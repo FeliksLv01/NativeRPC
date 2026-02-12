@@ -117,6 +117,9 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
     /// Read-write lock for thread-safe access (faster than NSLock for read-heavy workloads)
     private let rwLock = ReadWriteLock()
     
+    /// Global interceptor chain (applied to all connections)
+    public let interceptors = NativeRPCInterceptorChain()
+    
     // MARK: - Initialization
     
     private init() {}
@@ -139,16 +142,10 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
         rwLock.withWriteLock {
             let name = T.serviceName
             
-            if registrations[name] != nil {
-                print("[NativeRPC] Warning: Service '\(name)' is already registered, replacing...")
-            }
-            
             registrations[name] = ServiceRegistration(
                 serviceType: serviceType,
                 supportedConnectionTypes: T.supportedConnectionTypes
             )
-            
-            print("[NativeRPC] Registered service type: \(name)")
         }
     }
     
@@ -173,16 +170,10 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
         rwLock.withWriteLock {
             let name = serviceType.serviceName
             
-            if registrations[name] != nil {
-                print("[NativeRPC] Warning: Service '\(name)' is already registered, replacing...")
-            }
-            
             registrations[name] = ServiceRegistration(
                 serviceType: serviceType,
                 supportedConnectionTypes: serviceType.supportedConnectionTypes
             )
-            
-            print("[NativeRPC] Registered service type: \(name)")
         }
     }
     
@@ -190,10 +181,8 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
     ///
     /// - Parameter name: The service name to unregister
     public func unregister(name: String) {
-        rwLock.withWriteLock {
-            if registrations.removeValue(forKey: name) != nil {
-                print("[NativeRPC] Unregistered service type: \(name)")
-            }
+        _ = rwLock.withWriteLock {
+            registrations.removeValue(forKey: name)
         }
     }
     
@@ -262,7 +251,27 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
     public func reset() {
         rwLock.withWriteLock {
             registrations.removeAll()
-            print("[NativeRPC] Service center reset")
         }
+        interceptors.removeAll()
+    }
+    
+    // MARK: - Interceptors
+    
+    /// Add an interceptor to the global chain.
+    ///
+    /// Interceptors are called for all connections in the order they are added.
+    ///
+    /// Example:
+    /// ```swift
+    /// // Add logging interceptor
+    /// NativeRPCServiceCenter.shared.addInterceptor(NativeRPCLoggingInterceptor())
+    ///
+    /// // Add custom metrics interceptor
+    /// NativeRPCServiceCenter.shared.addInterceptor(MetricsInterceptor())
+    /// ```
+    ///
+    /// - Parameter interceptor: The interceptor to add
+    public func addInterceptor(_ interceptor: NativeRPCInterceptor) {
+        interceptors.add(interceptor)
     }
 }
