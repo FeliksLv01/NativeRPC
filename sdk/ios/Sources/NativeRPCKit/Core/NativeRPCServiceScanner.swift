@@ -6,13 +6,19 @@
 import Foundation
 import MachO
 
+/// Function pointer type stored in Mach-O section.
+/// Returns the service metatype as UnsafeRawPointer.
+private typealias ServiceMetatypeGetter = @convention(c) () -> UnsafeRawPointer
+
 /// Scans the Mach-O `__DATA_CONST,__nrpc_service` section to discover services
 /// registered with the `@NativeRPCService` macro.
-public enum NativeRPCServiceScanner {
+///
+/// - Note: Internal implementation detail. Use `NativeRPCServiceAutoRegistrar.registerAll()` instead.
+enum NativeRPCServiceScanner {
     
     /// Scans the main executable for registered service types.
     /// - Returns: An array of service metatypes
-    public static func scan() -> [Any.Type] {
+    static func scan() -> [Any.Type] {
         var header: UnsafePointer<mach_header_64>?
         
         #if DEBUG
@@ -64,7 +70,8 @@ public enum NativeRPCServiceScanner {
             return []
         }
         
-        let itemSize = MemoryLayout<NativeRPCServiceSectionItem>.stride
+        // Each entry is a raw function pointer
+        let itemSize = MemoryLayout<ServiceMetatypeGetter>.stride
         let count = Int(size) / itemSize
         let rawPtr = UnsafeRawPointer(sectionData)
         
@@ -72,8 +79,8 @@ public enum NativeRPCServiceScanner {
         results.reserveCapacity(count)
         
         for idx in 0..<count {
-            let item = rawPtr.load(fromByteOffset: idx * itemSize, as: NativeRPCServiceSectionItem.self)
-            let typePtr = item.getter()
+            let getter = rawPtr.load(fromByteOffset: idx * itemSize, as: ServiceMetatypeGetter.self)
+            let typePtr = getter()
             let serviceType = unsafeBitCast(typePtr, to: Any.Type.self)
             results.append(serviceType)
         }

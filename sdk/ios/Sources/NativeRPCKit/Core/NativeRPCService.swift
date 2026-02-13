@@ -12,7 +12,6 @@ import Foundation
 // - NativeRPCError.swift (NativeRPCError)
 // - NativeRPCContext.swift (NativeRPCContext, NativeRPCConnectionType)
 // - NativeRPCStub.swift (NativeRPCStub)
-// - NativeRPCServiceCenter.swift (NativeRPCServiceRegistrable)
 
 // MARK: - Service Protocol
 
@@ -74,9 +73,9 @@ public protocol NativeRPCServiceProtocol: AnyObject {
 /// is accessed in controlled ways: `stub` is set once on creation, and
 /// `_definitionContainer` is lazily initialized (race-safe via single-threaded access pattern).
 /// Safety invariant: Services are created once per connection and accessed through the stub's synchronization.
-open class NativeRPCService: NativeRPCServiceProtocol, NativeRPCServiceRegistrable, @unchecked Sendable {
+open class NativeRPCService: NativeRPCServiceProtocol, @unchecked Sendable {
     
-    // MARK: - Static Properties (for NativeRPCServiceRegistrable)
+    // MARK: - Static Properties
     
     /// The unique name identifying this service.
     /// Override this in subclasses to provide the service name.

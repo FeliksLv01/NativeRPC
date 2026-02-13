@@ -13,7 +13,7 @@ import SwiftSyntaxMacros
 /// This macro generates:
 /// 1. `override class var serviceName: String` with the provided name
 /// 2. A static getter function that returns the metatype as UnsafeRawPointer
-/// 3. A static section item stored in `__DATA_CONST,__nrpc_service`
+/// 3. A static function pointer stored in `__DATA_CONST,__nrpc_service`
 ///
 /// Example expansion:
 /// ```swift
@@ -33,9 +33,7 @@ import SwiftSyntaxMacros
 ///
 ///     @_section("__DATA_CONST,__nrpc_service")
 ///     @_used
-///     private static let _nrpc_service_item: NativeRPCServiceSectionItem = .init(
-///         getter: _nrpc_service_getter
-///     )
+///     private static let _nrpc_service_item = _nrpc_service_getter
 /// }
 /// ```
 public struct NativeRPCServiceMacro: MemberMacro {
@@ -54,17 +52,17 @@ public struct NativeRPCServiceMacro: MemberMacro {
             throw NativeRPCServiceMacroError.missingInheritance
         }
         
-        // 3. Check for NativeRPCService or NativeRPCServiceRegistrable conformance
+        // 3. Check for NativeRPCService conformance
         let hasNativeRPCServiceConformance = classDecl.inheritanceClause?.inheritedTypes.contains { type in
             // Handle simple type identifier
             if let identifierType = type.type.as(IdentifierTypeSyntax.self) {
                 let name = identifierType.name.text
-                return name == "NativeRPCService" || name == "NativeRPCServiceRegistrable"
+                return name == "NativeRPCService"
             }
             // Handle member type identifier (e.g. Module.NativeRPCService)
             if let memberType = type.type.as(MemberTypeSyntax.self) {
                 let name = memberType.name.text
-                return name == "NativeRPCService" || name == "NativeRPCServiceRegistrable"
+                return name == "NativeRPCService"
             }
             return false
         } ?? false
@@ -83,7 +81,7 @@ public struct NativeRPCServiceMacro: MemberMacro {
         
         let className = classDecl.name.text
         
-        // 5. Generate serviceName, getter function and section item
+        // 5. Generate serviceName, getter function and section item (raw function pointer)
         return [
             """
             override class var serviceName: String {
@@ -99,9 +97,7 @@ public struct NativeRPCServiceMacro: MemberMacro {
             """
             @_section("__DATA_CONST,__nrpc_service")
             @_used
-            private static let _nrpc_service_item: NativeRPCServiceSectionItem = .init(
-                getter: _nrpc_service_getter
-            )
+            private static let _nrpc_service_item = _nrpc_service_getter
             """
         ]
     }
@@ -122,7 +118,7 @@ enum NativeRPCServiceMacroError: Error, CustomStringConvertible {
         case .missingInheritance:
             return "@NativeRPCService requires the class to have an inheritance clause."
         case .missingNativeRPCServiceConformance:
-            return "@NativeRPCService requires the class to inherit from NativeRPCService or conform to NativeRPCServiceRegistrable."
+            return "@NativeRPCService requires the class to inherit from NativeRPCService."
         case .missingServiceName:
             return "@NativeRPCService requires a service name argument, e.g. @NativeRPCService(\"counter\")."
         }

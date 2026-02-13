@@ -314,6 +314,35 @@ public extension NativeRPCInterceptor {
     func didDestroyService(_ serviceName: String, context: NativeRPCInterceptorContext) {}
 }
 
+// MARK: - Read-Write Lock for Interceptor Chain
+
+/// A lightweight read-write lock wrapper using pthread_rwlock for high-performance concurrent reads.
+private final class InterceptorRWLock {
+    private var lock = pthread_rwlock_t()
+    
+    init() {
+        pthread_rwlock_init(&lock, nil)
+    }
+    
+    deinit {
+        pthread_rwlock_destroy(&lock)
+    }
+    
+    /// Execute a closure while holding the read lock
+    func withReadLock<T>(_ body: () throws -> T) rethrows -> T {
+        pthread_rwlock_rdlock(&lock)
+        defer { pthread_rwlock_unlock(&lock) }
+        return try body()
+    }
+    
+    /// Execute a closure while holding the write lock
+    func withWriteLock<T>(_ body: () throws -> T) rethrows -> T {
+        pthread_rwlock_wrlock(&lock)
+        defer { pthread_rwlock_unlock(&lock) }
+        return try body()
+    }
+}
+
 // MARK: - Interceptor Chain
 
 /// Manages a chain of interceptors
@@ -322,30 +351,30 @@ public final class NativeRPCInterceptorChain: @unchecked Sendable {
     /// The interceptors in the chain
     private var interceptors: [NativeRPCInterceptor] = []
     
-    /// Lock for thread-safe access
-    private let lock = NSLock()
+    /// Read-write lock for thread-safe access (faster than NSLock for read-heavy workloads)
+    private let rwLock = InterceptorRWLock()
     
     public init() {}
     
     /// Add an interceptor to the chain
     public func add(_ interceptor: NativeRPCInterceptor) {
-        lock.lock()
-        defer { lock.unlock() }
-        interceptors.append(interceptor)
+        rwLock.withWriteLock {
+            interceptors.append(interceptor)
+        }
     }
     
     /// Remove all interceptors
     public func removeAll() {
-        lock.lock()
-        defer { lock.unlock() }
-        interceptors.removeAll()
+        rwLock.withWriteLock {
+            interceptors.removeAll()
+        }
     }
     
     /// Get a snapshot of current interceptors
     private var currentInterceptors: [NativeRPCInterceptor] {
-        lock.lock()
-        defer { lock.unlock() }
-        return interceptors
+        rwLock.withReadLock {
+            interceptors
+        }
     }
     
     // MARK: - Dispatch Methods

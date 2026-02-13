@@ -155,7 +155,7 @@ val connection = FlutterMethodChannelConnection(channel, activity)
 ```swift
 import NativeRPCKit
 
-// 1. Define service (NativeRPCService already conforms to NativeRPCServiceRegistrable)
+// 1. Define service (inherits from NativeRPCService base class)
 final class CounterService: NativeRPCService {
     override class var serviceName: String { "counter" }
     

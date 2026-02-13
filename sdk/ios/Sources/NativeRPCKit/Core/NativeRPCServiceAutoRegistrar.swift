@@ -23,8 +23,8 @@ public enum NativeRPCServiceAutoRegistrar {
     private static let _performRegistration: Void = {
         let serviceTypes = NativeRPCServiceScanner.scan()
         for serviceType in serviceTypes {
-            if let registrableType = serviceType as? any NativeRPCServiceRegistrable.Type {
-                NativeRPCServiceCenter.shared.register(registrableType)
+            if let serviceClass = serviceType as? NativeRPCService.Type {
+                NativeRPCServiceCenter.shared.register(serviceClass)
             }
         }
     }()

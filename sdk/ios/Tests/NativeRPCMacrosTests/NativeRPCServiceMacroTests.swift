@@ -40,9 +40,7 @@ final class NativeRPCServiceMacroTests: XCTestCase {
 
                 @_section("__DATA_CONST,__nrpc_service")
                 @_used
-                private static let _nrpc_service_item: NativeRPCServiceSectionItem = .init(
-                    getter: _nrpc_service_getter
-                )
+                private static let _nrpc_service_item = _nrpc_service_getter
             }
             """,
             macros: testMacros
@@ -70,39 +68,7 @@ final class NativeRPCServiceMacroTests: XCTestCase {
 
                 @_section("__DATA_CONST,__nrpc_service")
                 @_used
-                private static let _nrpc_service_item: NativeRPCServiceSectionItem = .init(
-                    getter: _nrpc_service_getter
-                )
-            }
-            """,
-            macros: testMacros
-        )
-    }
-    
-    func testMacroExpansionWithNativeRPCServiceRegistrable() throws {
-        assertMacroExpansion(
-            """
-            @NativeRPCService("myService")
-            class MyService: NSObject, NativeRPCServiceRegistrable {
-            }
-            """,
-            expandedSource: """
-            class MyService: NSObject, NativeRPCServiceRegistrable {
-
-                override class var serviceName: String {
-                    "myService"
-                }
-
-                @_silgen_name("_nrpc_service_getter_MyService")
-                private static func _nrpc_service_getter() -> UnsafeRawPointer {
-                    unsafeBitCast(Self.self, to: UnsafeRawPointer.self)
-                }
-
-                @_section("__DATA_CONST,__nrpc_service")
-                @_used
-                private static let _nrpc_service_item: NativeRPCServiceSectionItem = .init(
-                    getter: _nrpc_service_getter
-                )
+                private static let _nrpc_service_item = _nrpc_service_getter
             }
             """,
             macros: testMacros
@@ -130,9 +96,7 @@ final class NativeRPCServiceMacroTests: XCTestCase {
 
                 @_section("__DATA_CONST,__nrpc_service")
                 @_used
-                private static let _nrpc_service_item: NativeRPCServiceSectionItem = .init(
-                    getter: _nrpc_service_getter
-                )
+                private static let _nrpc_service_item = _nrpc_service_getter
             }
             """,
             macros: testMacros
@@ -187,7 +151,7 @@ final class NativeRPCServiceMacroTests: XCTestCase {
             }
             """,
             diagnostics: [
-                DiagnosticSpec(message: "@NativeRPCService requires the class to inherit from NativeRPCService or conform to NativeRPCServiceRegistrable.", line: 1, column: 1)
+                DiagnosticSpec(message: "@NativeRPCService requires the class to inherit from NativeRPCService.", line: 1, column: 1)
             ],
             macros: testMacros
         )

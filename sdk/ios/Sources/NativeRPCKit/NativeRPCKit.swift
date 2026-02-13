@@ -16,7 +16,7 @@
 // - NativeRPCMessage.swift: NativeRPCMessageType, NativeRPCRequest, NativeRPCResponse, NativeRPCEvent, NativeRPCSubscription, NativeRPCErrorInfo
 // - NativeRPCError.swift: NativeRPCError
 // - NativeRPCService.swift: NativeRPCServiceProtocol, NativeRPCService
-// - NativeRPCServiceCenter.swift: NativeRPCServiceCenter, NativeRPCServiceRegistrable
+// - NativeRPCServiceCenter.swift: NativeRPCServiceCenter
 // - NativeRPCStub.swift: NativeRPCStub, NativeRPCStubDelegate
 // - NativeRPCContext.swift: NativeRPCContext, NativeRPCConnectionType
 // - NativeRPCInterceptor.swift: NativeRPCInterceptor, NativeRPCInterceptorChain, NativeRPCInterceptorContext,

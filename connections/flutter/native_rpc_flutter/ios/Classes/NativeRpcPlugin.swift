@@ -88,7 +88,7 @@ public class NativeRpcPlugin: NSObject, FlutterPlugin {
   /// ```swift
   /// NativeRpcPlugin.register(CounterService.self)
   /// ```
-  public static func register<T: NativeRPCServiceRegistrable>(_ serviceType: T.Type) {
+  public static func register<T: NativeRPCService>(_ serviceType: T.Type) {
     NativeRPCServiceCenter.shared.register(serviceType)
   }
   
@@ -101,7 +101,7 @@ public class NativeRpcPlugin: NSObject, FlutterPlugin {
   ///     UserService.self
   /// )
   /// ```
-  public static func register(_ serviceTypes: any NativeRPCServiceRegistrable.Type...) {
+  public static func register(_ serviceTypes: NativeRPCService.Type...) {
     for serviceType in serviceTypes {
       NativeRPCServiceCenter.shared.register(serviceType)
     }

@@ -6,35 +6,11 @@
 
 import Foundation
 
-// MARK: - Service Factory Protocol
-
-/// Protocol for service types that can be instantiated by the service center.
-/// Services must provide a `name` and an initializer that accepts a context.
-public protocol NativeRPCServiceRegistrable: NativeRPCServiceProtocol {
-    /// The unique name identifying this service (e.g., "counter", "user")
-    static var serviceName: String { get }
-    
-    /// Connection types this service supports (defaults to all)
-    static var supportedConnectionTypes: Set<NativeRPCConnectionType> { get }
-    
-    /// Create a new instance of this service with the given context
-    init(context: NativeRPCContext?)
-}
-
-// MARK: - Default Implementation
-
-extension NativeRPCServiceRegistrable {
-    /// By default, services support all connection types
-    public static var supportedConnectionTypes: Set<NativeRPCConnectionType> {
-        return [.flutter, .webView, .webSocket, .reactNative, .custom]
-    }
-}
-
 // MARK: - Service Registration Entry
 
 /// Internal storage for a registered service type
 private struct ServiceRegistration {
-    let serviceType: any NativeRPCServiceRegistrable.Type
+    let serviceType: NativeRPCService.Type
     let supportedConnectionTypes: Set<NativeRPCConnectionType>
 }
 
@@ -128,9 +104,9 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
     
     /// Register a service type with the service center.
     ///
-    /// The service type must conform to `NativeRPCServiceRegistrable` which requires:
+    /// The service type must be a subclass of `NativeRPCService` with:
     /// - A static `serviceName` property
-    /// - An `init(context:)` initializer
+    /// - A `required init(context:)` initializer
     ///
     /// - Parameter serviceType: The service type to register
     ///
@@ -138,7 +114,7 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
     /// ```swift
     /// NativeRPCServiceCenter.shared.register(CounterService.self)
     /// ```
-    public func register<T: NativeRPCServiceRegistrable>(_ serviceType: T.Type) {
+    public func register<T: NativeRPCService>(_ serviceType: T.Type) {
         rwLock.withWriteLock {
             let name = T.serviceName
             
@@ -159,14 +135,14 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
     ///     SettingsService.self
     /// )
     /// ```
-    public func register(_ serviceTypes: any NativeRPCServiceRegistrable.Type...) {
+    public func register(_ serviceTypes: NativeRPCService.Type...) {
         for serviceType in serviceTypes {
             registerAny(serviceType)
         }
     }
     
     /// Internal helper to register type-erased service types
-    private func registerAny(_ serviceType: any NativeRPCServiceRegistrable.Type) {
+    private func registerAny(_ serviceType: NativeRPCService.Type) {
         rwLock.withWriteLock {
             let name = serviceType.serviceName
             
@@ -189,7 +165,7 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
     /// Unregister a service type
     ///
     /// - Parameter serviceType: The service type to unregister
-    public func unregister<T: NativeRPCServiceRegistrable>(_ serviceType: T.Type) {
+    public func unregister<T: NativeRPCService>(_ serviceType: T.Type) {
         unregister(name: T.serviceName)
     }
     
@@ -200,7 +176,7 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
     ///
     /// - Parameter name: The service name
     /// - Returns: The service type if registered, nil otherwise
-    func serviceType(named name: String) -> (any NativeRPCServiceRegistrable.Type)? {
+    func serviceType(named name: String) -> NativeRPCService.Type? {
         rwLock.withReadLock {
             registrations[name]?.serviceType
         }
@@ -241,7 +217,7 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
     }
     
     /// Check if a service type is registered
-    public func isRegistered<T: NativeRPCServiceRegistrable>(_ serviceType: T.Type) -> Bool {
+    public func isRegistered<T: NativeRPCService>(_ serviceType: T.Type) -> Bool {
         return isRegistered(name: T.serviceName)
     }
     

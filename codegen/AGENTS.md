@@ -540,7 +540,7 @@ Connection Closed:
 
 | Platform | Registration Pattern | Factory Pattern |
 |----------|---------------------|-----------------|
-| **Swift** | `register(MyService.self)` | Uses `NativeRPCServiceRegistrable` protocol |
+| **Swift** | `register(MyService.self)` | Uses `NativeRPCService.Type` metatype |
 | **Kotlin** | `register(MyService.Factory)` | Uses `NativeRPCServiceFactory<T>` interface |
 
 ### Template Variables
