@@ -17,7 +17,7 @@ import Foundation
 /// The registrar scans the Mach-O `__DATA_CONST,__nrpc_service` section to find
 /// all services registered at compile time via the `@NativeRPCService` macro,
 /// then registers them with `NativeRPCServiceCenter.shared`.
-public enum NativeRPCServiceAutoRegistrar {
+enum NativeRPCServiceAutoRegistrar {
     
     /// Uses Swift's `static let` dispatch_once semantics for thread-safe one-time initialization.
     private static let _performRegistration: Void = {
@@ -34,7 +34,7 @@ public enum NativeRPCServiceAutoRegistrar {
     /// This method is idempotent - calling it multiple times has no effect
     /// after the first successful registration. Thread-safe via Swift's
     /// static let dispatch_once semantics.
-    public static func registerAll() {
+    static func registerAll() {
         _ = _performRegistration
     }
 }

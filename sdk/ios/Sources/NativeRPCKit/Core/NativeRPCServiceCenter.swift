@@ -101,6 +101,15 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
     private init() {}
     
     // MARK: - Registration
+        
+    /// Scans and registers all services marked with `@NativeRPCService`.
+    ///
+    /// This method is idempotent - calling it multiple times has no effect
+    /// after the first successful registration. Thread-safe via Swift's
+    /// static let dispatch_once semantics.
+    public func autoScan() {
+        NativeRPCServiceAutoRegistrar.registerAll()
+    }
     
     /// Register a service type with the service center.
     ///
