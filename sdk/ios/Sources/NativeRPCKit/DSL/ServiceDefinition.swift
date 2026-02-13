@@ -42,6 +42,8 @@ public protocol AnyServiceDefinitionElement: AnyDefinition {}
 public protocol AnySyncFunction: AnyServiceDefinitionElement {
     var name: String { get }
     var argumentsCount: Int { get }
+    /// Whether to run on MainActor (default: true for UI safety)
+    var requiresMainActor: Bool { get }
     func call(args: [Any]) throws -> Any?
 }
 
@@ -57,10 +59,16 @@ public protocol AnyAsyncFunction: AnyServiceDefinitionElement {
 // MARK: - Sync Function Definition
 
 /// Synchronous function definition with Codable params support
+///
+/// By default, sync functions run on the main thread for UI safety.
+/// Use `.runInBackground()` to explicitly run on a background queue.
 public final class SyncFunctionDefinition<Params: Decodable, R: Encodable>: AnySyncFunction {
     public let name: String
     public let argumentsCount: Int
     private let body: (Params) throws -> R
+    
+    /// Whether to run on MainActor (default: true for UI safety)
+    public private(set) var requiresMainActor: Bool = true
     
     public init(name: String, argumentsCount: Int, body: @escaping (Params) throws -> R) {
         self.name = name
@@ -113,6 +121,16 @@ public final class SyncFunctionDefinition<Params: Decodable, R: Encodable>: AnyS
         // For complex Encodable types, encode to JSON-compatible dictionary/array
         let data = try JSONEncoder().encode(result)
         return try JSONSerialization.jsonObject(with: data)
+    }
+    
+    // MARK: - Fluent API
+    
+    /// Run on a background queue instead of main thread.
+    /// Use this for CPU-intensive operations that don't touch UI.
+    @discardableResult
+    public func runInBackground() -> Self {
+        self.requiresMainActor = false
+        return self
     }
 }
 

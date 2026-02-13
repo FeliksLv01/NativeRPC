@@ -56,8 +56,11 @@ public struct NativeRPCRequestInfo: Sendable {
     /// Request type
     public let type: RequestType
     
-    /// Raw parameters (as AnyCodable for Sendable)
-    public let params: AnyCodable?
+    /// Raw parameters
+    public var params: Any? { _params?.value }
+    
+    /// Internal storage (AnyCodable for Sendable conformance)
+    private let _params: AnyCodable?
     
     /// Request types
     public enum RequestType: String, Sendable {
@@ -79,7 +82,7 @@ public struct NativeRPCRequestInfo: Sendable {
         self.service = service
         self.methodName = methodName
         self.type = type
-        self.params = params.map { AnyCodable($0) }
+        self._params = params.map { AnyCodable($0) }
     }
 }
 
@@ -94,7 +97,10 @@ public struct NativeRPCResponseInfo: Sendable {
     public let isSuccess: Bool
     
     /// Result data (for success)
-    public let result: AnyCodable?
+    public var result: Any? { _result?.value }
+    
+    /// Internal storage (AnyCodable for Sendable conformance)
+    private let _result: AnyCodable?
     
     /// Error info (for failure)
     public let error: ErrorInfo?
@@ -111,6 +117,21 @@ public struct NativeRPCResponseInfo: Sendable {
             self.code = code
             self.message = message
         }
+    }
+    
+    /// Internal initializer
+    private init(
+        id: String,
+        isSuccess: Bool,
+        result: AnyCodable?,
+        error: ErrorInfo?,
+        duration: TimeInterval
+    ) {
+        self.id = id
+        self.isSuccess = isSuccess
+        self._result = result
+        self.error = error
+        self.duration = duration
     }
     
     /// Create a success response info
@@ -150,13 +171,16 @@ public struct NativeRPCEventInfo: Sendable {
     public let eventName: String
     
     /// Event data
-    public let params: AnyCodable?
+    public var params: Any? { _params?.value }
+    
+    /// Internal storage (AnyCodable for Sendable conformance)
+    private let _params: AnyCodable?
     
     public init(event: String, service: String, eventName: String, params: Any?) {
         self.event = event
         self.service = service
         self.eventName = eventName
-        self.params = params.map { AnyCodable($0) }
+        self._params = params.map { AnyCodable($0) }
     }
 }
 
@@ -497,7 +521,7 @@ public final class NativeRPCLoggingInterceptor: NativeRPCInterceptor, @unchecked
         case .call:
             log(.info, "→ \(request.method)")
             if logLevel == .verbose, let params = request.params {
-                log(.verbose, "  params: \(params.value)")
+                log(.verbose, "  params: \(params)")
             }
         case .subscribe:
             log(.verbose, "→ subscribe: \(request.method)")
@@ -512,7 +536,7 @@ public final class NativeRPCLoggingInterceptor: NativeRPCInterceptor, @unchecked
         if response.isSuccess {
             log(.info, "← \(request.method) ✓ (\(durationMs)ms)")
             if logLevel == .verbose, let result = response.result {
-                log(.verbose, "  result: \(result.value)")
+                log(.verbose, "  result: \(result)")
             }
         } else if let error = response.error {
             log(.error, "← \(request.method) ✗ [\(error.code)] \(error.message) (\(durationMs)ms)")
@@ -522,7 +546,7 @@ public final class NativeRPCLoggingInterceptor: NativeRPCInterceptor, @unchecked
     public func willSendEvent(_ event: NativeRPCEventInfo, context: NativeRPCInterceptorContext) {
         log(.info, "⇢ \(event.event)")
         if logLevel == .verbose, let params = event.params {
-            log(.verbose, "  params: \(params.value)")
+            log(.verbose, "  params: \(params)")
         }
     }
     

@@ -439,6 +439,48 @@ final class NativeRPCKitTests: XCTestCase {
         XCTAssertEqual(result as? String, "main thread work")
     }
     
+    func testSyncFunctionRunsOnMainByDefault() async throws {
+        class UIService: NativeRPCService, @unchecked Sendable {
+            override class var serviceName: String { "ui" }
+            
+            @ServiceDefinitionBuilder
+            override func definition() -> ServiceDefinitionContainer {
+                // Sync functions run on main thread by default
+                Function("checkThread") { () -> Bool in
+                    Thread.isMainThread
+                }
+            }
+        }
+        
+        let service = UIService()
+        // Call from a background task to verify it switches to main
+        let result = try await Task.detached {
+            try await service.handleCall(method: "checkThread", args: [])
+        }.value
+        XCTAssertEqual(result as? Bool, true, "Sync function should run on main thread by default")
+    }
+    
+    func testSyncFunctionRunInBackground() async throws {
+        class BackgroundService: NativeRPCService, @unchecked Sendable {
+            override class var serviceName: String { "background" }
+            
+            @ServiceDefinitionBuilder
+            override func definition() -> ServiceDefinitionContainer {
+                // Explicitly run on background thread
+                Function("checkThread") { () -> Bool in
+                    Thread.isMainThread
+                }.runInBackground()
+            }
+        }
+        
+        let service = BackgroundService()
+        // Call from a background task - should stay on background
+        let result = try await Task.detached {
+            try await service.handleCall(method: "checkThread", args: [])
+        }.value
+        XCTAssertEqual(result as? Bool, false, "Sync function with runInBackground() should NOT run on main thread")
+    }
+    
     // MARK: - Convertible Tests
     
     func testURLConversion() throws {

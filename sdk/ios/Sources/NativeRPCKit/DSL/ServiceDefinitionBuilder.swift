@@ -101,13 +101,29 @@ public final class ServiceDefinitionContainer {
     }
     
     /// Call a method (async wrapper for both sync and async)
+    ///
+    /// - Sync functions: Run on main thread by default (for UI safety), unless `.runInBackground()` is called
+    /// - Async functions: Run on main thread if `.runOnMain()` is called, otherwise on caller's context
     public func call(method: String, args: [Any]) async throws -> Any? {
         if let asyncFunction = asyncFunctions[method] {
             return try await asyncFunction.call(args: args)
         }
         
         if let syncFunction = syncFunctions[method] {
-            return try syncFunction.call(args: args)
+            if syncFunction.requiresMainActor {
+                // Run sync function on main thread for UI safety
+                // Use nonisolated(unsafe) to suppress Swift 6 warnings - this is safe because:
+                // 1. syncFunction is immutable after creation
+                // 2. args are copied into the closure
+                nonisolated(unsafe) let capturedFunc = syncFunction
+                nonisolated(unsafe) let capturedArgs = args
+                return try await MainActor.run {
+                    try capturedFunc.call(args: capturedArgs)
+                }
+            } else {
+                // Run on current (background) context
+                return try syncFunction.call(args: args)
+            }
         }
         
         throw NativeRPCError.methodNotFound(method, service: serviceName)
