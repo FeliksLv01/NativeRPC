@@ -81,9 +81,10 @@ export class SwiftServiceMerger {
     const lines = content.split('\n');
     
     // Pattern to match Function/AsyncFunction definitions
-    // Matches: Function("name") { ... in
+    // Matches: Function("name") { ... in     (with parameters)
     // Matches: AsyncFunction("name") { ... in
-    const functionStartPattern = /(?:Async)?Function\("(\w+)"\)\s*\{[^}]*\bin\b/;
+    // Matches: Function("name") {            (void without parameters - no 'in')
+    const functionStartPattern = /(?:Async)?Function\("(\w+)"\)\s*\{/;
     
     let i = 0;
     while (i < lines.length) {
@@ -129,13 +130,9 @@ export class SwiftServiceMerger {
           }
         }
         
-        // Remove the last line if it's just the closing brace
-        if (bodyLines.length > 0) {
-          const lastLine = bodyLines[bodyLines.length - 1].trim();
-          if (lastLine === '}' || lastLine === '},') {
-            bodyLines.pop();
-          }
-        }
+        // Note: The closing brace of the Function closure is NOT included in bodyLines
+        // because the loop breaks before adding it. So we should NOT remove any trailing }
+        // as it might be part of the actual implementation (e.g., a switch statement's closing brace).
         
         methods.set(methodName, {
           name: methodName,
@@ -259,13 +256,9 @@ export class KotlinServiceMerger {
           }
         }
         
-        // Remove the last line if it's just the closing brace
-        if (bodyLines.length > 0) {
-          const lastLine = bodyLines[bodyLines.length - 1].trim();
-          if (lastLine === '}' || lastLine === '},') {
-            bodyLines.pop();
-          }
-        }
+        // Note: The closing brace of the function closure is NOT included in bodyLines
+        // because the loop breaks before adding it. So we should NOT remove any trailing }
+        // as it might be part of the actual implementation.
         
         // Remove the arrow line if it's the first line (e.g., "args ->")
         if (bodyLines.length > 0) {

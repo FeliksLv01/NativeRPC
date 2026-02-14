@@ -92,7 +92,7 @@ final class {{className}}: {{baseClass}} {
         {{#hasDocumentation}}
         // {{{documentation}}}
         {{/hasDocumentation}}
-        Function("{{methodName}}") { {{#hasParams}}(params: {{methodNamePascal}}Params){{/hasParams}} in
+        Function("{{methodName}}") { {{#hasParams}}(params: {{methodNamePascal}}Params) in{{/hasParams}}
             {{#existingImplementation}}
 {{{.}}}
             {{/existingImplementation}}

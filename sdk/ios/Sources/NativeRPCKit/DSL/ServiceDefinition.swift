@@ -5,26 +5,19 @@
 
 import Foundation
 
-// MARK: - Sendable Box Helper
-
-/// Box for wrapping non-Sendable values when crossing isolation boundaries
-/// Used internally to silence Swift 6 warnings for values we know are safe.
-/// Safety: Only used within @unchecked Sendable types where we control access.
-private struct UnsafeSendableBox<T>: @unchecked Sendable {
-    let value: T
-}
+// MARK: - (Removed UnsafeSendableBox - no longer needed in v2.3+)
 
 // MARK: - VoidParams
 
 /// Placeholder type for functions with no parameters
 /// Used internally to satisfy Decodable constraint when no params are needed
-public struct VoidParams: Codable {
+public struct VoidParams: Codable, Sendable {
     public init() {}
 }
 
 /// Placeholder type for functions that return nothing
 /// Used internally to satisfy Encodable constraint when no result is returned
-public struct VoidResult: Codable {
+public struct VoidResult: Codable, Sendable {
     public init() {}
 }
 
@@ -142,66 +135,78 @@ public final class SyncFunctionDefinition<Params: Decodable, R: Encodable>: AnyS
 /// Note: Marked `@unchecked Sendable` because the `body` closure is captured
 /// and may be called from different isolation contexts.
 /// Safety invariant: Callers ensure arguments/results are safe to pass across boundaries.
-public final class AsyncFunctionDefinition<Params: Decodable, R: Encodable>: AnyAsyncFunction, @unchecked Sendable {
+///
+/// **Threading**: By default, async functions run on the main thread (MainActor) for UI safety,
+/// consistent with `SyncFunctionDefinition`. The `@MainActor` isolation is baked into the
+/// stored closure at init time, so calling the body from any context will automatically
+/// dispatch to MainActor.
+///
+/// Use `init(name:argumentsCount:backgroundBody:)` or `BackgroundAsyncFunction()` DSL
+/// to create functions that run on the cooperative thread pool instead.
+public final class AsyncFunctionDefinition<Params: Decodable, R: Encodable & Sendable>: AnyAsyncFunction, @unchecked Sendable {
     public let name: String
     public let argumentsCount: Int
+    
+    /// The body closure — MainActor dispatch is baked in for MainActor bodies.
+    /// For background bodies, this is the raw closure without actor isolation.
     private let body: (Params) async throws -> R
     
-    /// Queue to run the function on (nil = default async queue)
-    public private(set) var queue: DispatchQueue?
+    /// Queue (always nil in v2.3+, kept for protocol compatibility)
+    public var queue: DispatchQueue? { nil }
     
-    /// Whether to run on MainActor
-    public private(set) var requiresMainActor: Bool = false
+    /// Whether this function runs on MainActor
+    public let requiresMainActor: Bool
     
-    public init(name: String, argumentsCount: Int, body: @escaping (Params) async throws -> R) {
+    /// Create a MainActor-isolated async function (default).
+    ///
+    /// The body closure is guaranteed to run entirely on MainActor, including
+    /// after any `await` suspension points within the closure.
+    ///
+    /// - Parameters:
+    ///   - name: The function name
+    ///   - argumentsCount: Number of arguments (0 or 1)
+    ///   - body: The `@MainActor` async closure to execute
+    public init(name: String, argumentsCount: Int, body: @MainActor @escaping (Params) async throws -> R) {
         self.name = name
         self.argumentsCount = argumentsCount
-        self.body = body
+        self.requiresMainActor = true
+        // Wrap the @MainActor closure in a non-isolated wrapper.
+        // When this wrapper calls the captured @MainActor closure,
+        // Swift will automatically dispatch to MainActor — this is guaranteed
+        // by Swift's actor isolation model.
+        //
+        // Note: Swift 6 may warn about non-Sendable Params/R crossing isolation
+        // boundaries. This is safe because Params are decoded from JSON (value-like)
+        // and results are encoded back to JSON before leaving this context.
+        // Use nonisolated(unsafe) on the captured body to suppress Swift 6
+        // Sendable warnings when crossing the isolation boundary.
+        // This is safe because Params/R are decoded from/encoded to JSON (value-like).
+        nonisolated(unsafe) let safeBody = body
+        self.body = { params in
+            nonisolated(unsafe) let safeParams = params
+            return try await safeBody(safeParams)
+        }
+    }
+    
+    /// Create a background async function.
+    ///
+    /// The body closure runs on the cooperative thread pool without actor isolation.
+    /// Use this for CPU-intensive operations that don't touch UI.
+    ///
+    /// - Parameters:
+    ///   - name: The function name
+    ///   - argumentsCount: Number of arguments (0 or 1)
+    ///   - backgroundBody: The async closure to execute on the cooperative thread pool
+    public init(name: String, argumentsCount: Int, backgroundBody: @escaping (Params) async throws -> R) {
+        self.name = name
+        self.argumentsCount = argumentsCount
+        self.requiresMainActor = false
+        self.body = backgroundBody
     }
     
     public func call(args: [Any]) async throws -> Any? {
         let params: Params = try decodeParams(from: args)
-        
-        let result: R
-        if requiresMainActor {
-            // Box values to cross isolation boundary safely
-            let paramsBox = UnsafeSendableBox(value: params)
-            let bodyBox = UnsafeSendableBox(value: body)
-            
-            // Use withCheckedThrowingContinuation to properly bridge to MainActor
-            result = try await withCheckedThrowingContinuation { continuation in
-                DispatchQueue.main.async {
-                    Task { @MainActor in
-                        do {
-                            let r = try await bodyBox.value(paramsBox.value)
-                            continuation.resume(returning: r)
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
-                    }
-                }
-            }
-        } else if let queue = queue {
-            // Box values to cross isolation boundary safely
-            let paramsBox = UnsafeSendableBox(value: params)
-            let bodyBox = UnsafeSendableBox(value: body)
-            
-            result = try await withCheckedThrowingContinuation { continuation in
-                queue.async {
-                    Task {
-                        do {
-                            let r = try await bodyBox.value(paramsBox.value)
-                            continuation.resume(returning: r)
-                        } catch {
-                            continuation.resume(throwing: error)
-                        }
-                    }
-                }
-            }
-        } else {
-            result = try await body(params)
-        }
-        
+        let result = try await body(params)
         return try encodeResult(result)
     }
     
@@ -244,22 +249,6 @@ public final class AsyncFunctionDefinition<Params: Decodable, R: Encodable>: Any
         // For complex Encodable types, encode to JSON-compatible dictionary/array
         let data = try JSONEncoder().encode(result)
         return try JSONSerialization.jsonObject(with: data)
-    }
-    
-    // MARK: - Fluent API
-    
-    /// Specify the queue to run the function on
-    @discardableResult
-    public func runOnQueue(_ queue: DispatchQueue?) -> Self {
-        self.queue = queue
-        return self
-    }
-    
-    /// Run on the main queue
-    @discardableResult
-    public func runOnMain() -> Self {
-        self.requiresMainActor = true
-        return self
     }
 }
 

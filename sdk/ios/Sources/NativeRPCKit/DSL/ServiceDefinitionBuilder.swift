@@ -5,6 +5,15 @@
 
 import Foundation
 
+// MARK: - Sendable Wrapper for Any
+
+/// A wrapper that allows Any? to cross isolation boundaries safely.
+/// This is marked @unchecked Sendable because the wrapped value is always
+/// JSON-compatible (serializable) and thus safe to transfer.
+private struct SendableAnyBox: @unchecked Sendable {
+    let value: Any?
+}
+
 // MARK: - Service Definition Container
 
 /// Runtime container that stores all definitions for a service
@@ -112,14 +121,15 @@ public final class ServiceDefinitionContainer {
         if let syncFunction = syncFunctions[method] {
             if syncFunction.requiresMainActor {
                 // Run sync function on main thread for UI safety
-                // Use nonisolated(unsafe) to suppress Swift 6 warnings - this is safe because:
-                // 1. syncFunction is immutable after creation
-                // 2. args are copied into the closure
+                // Use nonisolated(unsafe) to cross isolation boundary safely.
+                // This is safe because syncFunction is immutable after creation
+                // and args/results are JSON-compatible values.
                 nonisolated(unsafe) let capturedFunc = syncFunction
                 nonisolated(unsafe) let capturedArgs = args
-                return try await MainActor.run {
-                    try capturedFunc.call(args: capturedArgs)
+                let box = try await MainActor.run {
+                    SendableAnyBox(value: try capturedFunc.call(args: capturedArgs))
                 }
+                return box.value
             } else {
                 // Run on current (background) context
                 return try syncFunction.call(args: args)

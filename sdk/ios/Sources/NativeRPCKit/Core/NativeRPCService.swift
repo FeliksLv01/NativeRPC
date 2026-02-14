@@ -44,7 +44,7 @@ public protocol NativeRPCServiceProtocol: AnyObject {
 ///     override class var serviceName: String { "myService" }
 ///     
 ///     // Required: init with context
-///     required init(context: NativeRPCContext?) {
+///     required init(context: NativeRPCContext) {
 ///         super.init(context: context)
 ///     }
 ///     
@@ -54,7 +54,7 @@ public protocol NativeRPCServiceProtocol: AnyObject {
 ///         
 ///         Function("getUserId") { () -> String? in
 ///             // Access connection-scoped context
-///             self.context?.get("userId")
+///             self.context.get("userId")
 ///         }
 ///         
 ///         AsyncFunction("fetchData") { (id: String) async throws -> Data in
@@ -69,11 +69,15 @@ public protocol NativeRPCServiceProtocol: AnyObject {
 /// NativeRPCServiceCenter.shared.register(MyService.self)
 /// ```
 ///
-/// Note: Marked `@unchecked Sendable` because mutable state (`stub`, `_definitionContainer`)
-/// is accessed in controlled ways: `stub` is set once on creation, and
-/// `_definitionContainer` is lazily initialized (race-safe via single-threaded access pattern).
-/// Safety invariant: Services are created once per connection and accessed through the stub's synchronization.
-open class NativeRPCService: NativeRPCServiceProtocol, @unchecked Sendable {
+/// Note: Not marked `Sendable` intentionally — services are managed by `NativeRPCStub`
+/// which handles all synchronization internally via its concurrent queue.
+/// Mutable state (`stub`, `_definitionContainer`) is accessed in controlled ways:
+/// `stub` is set once on creation, and `_definitionContainer` is lazily initialized
+/// (race-safe via single-threaded access pattern within the stub's queue).
+///
+/// If your subclass needs to be passed across isolation boundaries explicitly,
+/// you can add `@unchecked Sendable` conformance to your subclass.
+open class NativeRPCService: NativeRPCServiceProtocol {
     
     // MARK: - Static Properties
     
@@ -107,10 +111,10 @@ open class NativeRPCService: NativeRPCServiceProtocol, @unchecked Sendable {
     // MARK: - Instance Properties
     
     /// The context for this connection (contains connection info and shared storage)
-    public let context: NativeRPCContext?
+    public let context: NativeRPCContext
     
     /// Weak reference to the stub that owns this service
-    public internal(set) weak var stub: NativeRPCStub?
+    weak var stub: NativeRPCStub?
     
     /// Cached service definition container
     private var _definitionContainer: ServiceDefinitionContainer?
@@ -134,8 +138,8 @@ open class NativeRPCService: NativeRPCServiceProtocol, @unchecked Sendable {
     ///
     /// Subclasses MUST override this initializer and call `super.init(context:)`.
     ///
-    /// - Parameter context: The connection context (nil for testing)
-    public required init(context: NativeRPCContext?) {
+    /// - Parameter context: The connection context
+    public required init(context: NativeRPCContext) {
         self.context = context
         // Trigger create lifecycle
         _ = definitionContainer  // Force lazy init
@@ -144,11 +148,6 @@ open class NativeRPCService: NativeRPCServiceProtocol, @unchecked Sendable {
         definitionContainer.setServiceName(Self.serviceName)
         
         definitionContainer.triggerLifecycle(.create)
-    }
-    
-    /// Convenience initializer for testing without context
-    public convenience init() {
-        self.init(context: nil)
     }
     
     // MARK: - Definition (override in subclass)
@@ -264,7 +263,7 @@ open class NativeRPCService: NativeRPCServiceProtocol, @unchecked Sendable {
     // MARK: - Context Convenience
     
     /// Get the connection type (convenience accessor)
-    public var connectionType: NativeRPCConnectionType? {
-        return context?.connectionType
+    public var connectionType: NativeRPCConnectionType {
+        return context.connectionType
     }
 }

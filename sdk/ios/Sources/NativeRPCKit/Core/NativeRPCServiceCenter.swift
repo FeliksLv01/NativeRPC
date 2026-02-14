@@ -101,7 +101,7 @@ public final class NativeRPCServiceCenter: @unchecked Sendable {
     private init() {}
     
     // MARK: - Registration
-        
+    
     /// Scans and registers all services marked with `@NativeRPCService`.
     ///
     /// This method is idempotent - calling it multiple times has no effect

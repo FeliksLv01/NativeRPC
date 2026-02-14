@@ -107,9 +107,12 @@ public func Function<Params: Decodable>(_ name: String, _ body: @escaping (Param
     }
 }
 
-// MARK: - Async Functions (Swift Concurrency)
+// MARK: - Async Functions (Swift Concurrency, MainActor by default)
 
 /// Creates an asynchronous function with no parameters (Swift async/await)
+///
+/// The body runs on MainActor by default for UI safety.
+/// Use `BackgroundAsyncFunction` for CPU-intensive operations that don't touch UI.
 ///
 /// Example:
 /// ```swift
@@ -117,11 +120,16 @@ public func Function<Params: Decodable>(_ name: String, _ body: @escaping (Param
 ///     try await api.fetchAllItems()
 /// }
 /// ```
-public func AsyncFunction<R: Encodable>(_ name: String, _ body: @escaping () async throws -> R) -> AsyncFunctionDefinition<VoidParams, R> {
-    AsyncFunctionDefinition(name: name, argumentsCount: 0) { _ in try await body() }
+public func AsyncFunction<R: Encodable & Sendable>(_ name: String, _ body: @MainActor @escaping () async throws -> R) -> AsyncFunctionDefinition<VoidParams, R> {
+    nonisolated(unsafe) let safeBody = body
+    return AsyncFunctionDefinition(name: name, argumentsCount: 0) { _ in
+        try await safeBody()
+    }
 }
 
 /// Creates an asynchronous function with no parameters returning Void
+///
+/// The body runs on MainActor by default for UI safety.
 ///
 /// Example:
 /// ```swift
@@ -129,7 +137,7 @@ public func AsyncFunction<R: Encodable>(_ name: String, _ body: @escaping () asy
 ///     try await api.syncData()
 /// }
 /// ```
-public func AsyncFunction(_ name: String, _ body: @escaping () async throws -> Void) -> AsyncFunctionDefinition<VoidParams, VoidResult> {
+public func AsyncFunction(_ name: String, _ body: @MainActor @escaping () async throws -> Void) -> AsyncFunctionDefinition<VoidParams, VoidResult> {
     AsyncFunctionDefinition(name: name, argumentsCount: 0) { _ in
         try await body()
         return VoidResult()
@@ -137,6 +145,8 @@ public func AsyncFunction(_ name: String, _ body: @escaping () async throws -> V
 }
 
 /// Creates an asynchronous function with Codable parameters (Swift async/await)
+///
+/// The body runs on MainActor by default for UI safety.
 ///
 /// Example:
 /// ```swift
@@ -148,11 +158,13 @@ public func AsyncFunction(_ name: String, _ body: @escaping () async throws -> V
 ///     try await api.getUser(params.id)
 /// }
 /// ```
-public func AsyncFunction<Params: Decodable, R: Encodable>(_ name: String, _ body: @escaping (Params) async throws -> R) -> AsyncFunctionDefinition<Params, R> {
+public func AsyncFunction<Params: Decodable, R: Encodable>(_ name: String, _ body: @MainActor @escaping (Params) async throws -> R) -> AsyncFunctionDefinition<Params, R> {
     AsyncFunctionDefinition(name: name, argumentsCount: 1, body: body)
 }
 
 /// Creates an asynchronous function with Codable parameters returning Void
+///
+/// The body runs on MainActor by default for UI safety.
 ///
 /// Example:
 /// ```swift
@@ -164,11 +176,78 @@ public func AsyncFunction<Params: Decodable, R: Encodable>(_ name: String, _ bod
 ///     try await api.deleteUser(params.id)
 /// }
 /// ```
-public func AsyncFunction<Params: Decodable>(_ name: String, _ body: @escaping (Params) async throws -> Void) -> AsyncFunctionDefinition<Params, VoidResult> {
-    AsyncFunctionDefinition(name: name, argumentsCount: 1) { params in
-        try await body(params)
+public func AsyncFunction<Params: Decodable>(_ name: String, _ body: @MainActor @escaping (Params) async throws -> Void) -> AsyncFunctionDefinition<Params, VoidResult> {
+    nonisolated(unsafe) let safeBody = body
+    return AsyncFunctionDefinition(name: name, argumentsCount: 1) { params in
+        nonisolated(unsafe) let safeParams = params
+        try await safeBody(safeParams)
         return VoidResult()
     }
+}
+
+// MARK: - Background Async Functions (No actor isolation)
+
+/// Creates a background asynchronous function with no parameters
+///
+/// The body runs on the cooperative thread pool without actor isolation.
+/// Use this for CPU-intensive operations that don't touch UI.
+///
+/// Example:
+/// ```swift
+/// BackgroundAsyncFunction("compute") { () async throws -> Int in
+///     try await heavyComputation()
+/// }
+/// ```
+public func BackgroundAsyncFunction<R: Encodable>(_ name: String, _ body: @escaping () async throws -> R) -> AsyncFunctionDefinition<VoidParams, R> {
+    AsyncFunctionDefinition(name: name, argumentsCount: 0, backgroundBody: { _ in try await body() })
+}
+
+/// Creates a background asynchronous function with no parameters returning Void
+///
+/// The body runs on the cooperative thread pool without actor isolation.
+///
+/// Example:
+/// ```swift
+/// BackgroundAsyncFunction("cleanup") { () async throws in
+///     try await performCleanup()
+/// }
+/// ```
+public func BackgroundAsyncFunction(_ name: String, _ body: @escaping () async throws -> Void) -> AsyncFunctionDefinition<VoidParams, VoidResult> {
+    AsyncFunctionDefinition(name: name, argumentsCount: 0, backgroundBody: { _ in
+        try await body()
+        return VoidResult()
+    })
+}
+
+/// Creates a background asynchronous function with Codable parameters
+///
+/// The body runs on the cooperative thread pool without actor isolation.
+///
+/// Example:
+/// ```swift
+/// BackgroundAsyncFunction("process") { (params: ProcessParams) async throws -> Result in
+///     try await processData(params)
+/// }
+/// ```
+public func BackgroundAsyncFunction<Params: Decodable, R: Encodable>(_ name: String, _ body: @escaping (Params) async throws -> R) -> AsyncFunctionDefinition<Params, R> {
+    AsyncFunctionDefinition(name: name, argumentsCount: 1, backgroundBody: body)
+}
+
+/// Creates a background asynchronous function with Codable parameters returning Void
+///
+/// The body runs on the cooperative thread pool without actor isolation.
+///
+/// Example:
+/// ```swift
+/// BackgroundAsyncFunction("upload") { (params: UploadParams) async throws in
+///     try await uploadData(params)
+/// }
+/// ```
+public func BackgroundAsyncFunction<Params: Decodable>(_ name: String, _ body: @escaping (Params) async throws -> Void) -> AsyncFunctionDefinition<Params, VoidResult> {
+    AsyncFunctionDefinition(name: name, argumentsCount: 1, backgroundBody: { params in
+        try await body(params)
+        return VoidResult()
+    })
 }
 
 // MARK: - Events

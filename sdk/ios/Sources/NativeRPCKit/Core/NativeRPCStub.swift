@@ -9,7 +9,7 @@ import Foundation
 // MARK: - Stub Delegate Protocol
 
 /// Protocol for receiving outgoing messages from the stub
-public protocol NativeRPCStubDelegate: AnyObject {
+protocol NativeRPCStubDelegate: AnyObject {
     /// Send a JSON message string to the client
     func sendMessage(_ jsonString: String)
 }
@@ -40,15 +40,15 @@ public protocol NativeRPCStubDelegate: AnyObject {
 /// Note: Marked `@unchecked Sendable` because mutable state (`services`, `subscriptions`)
 /// is protected by the internal `queue` (concurrent DispatchQueue with barrier writes).
 /// Safety invariant: All mutations use `.barrier` flag, reads use `queue.sync`.
-public final class NativeRPCStub: @unchecked Sendable {
+final class NativeRPCStub: @unchecked Sendable {
     
     // MARK: - Properties
     
     /// The context for this connection (contains connection info and shared storage)
-    public let context: NativeRPCContext
+    let context: NativeRPCContext
     
     /// Delegate to send outgoing messages
-    public weak var delegate: NativeRPCStubDelegate?
+    weak var delegate: NativeRPCStubDelegate?
     
     /// Instantiated services for this connection, keyed by service name
     private var services: [String: NativeRPCService] = [:]
@@ -88,7 +88,7 @@ public final class NativeRPCStub: @unchecked Sendable {
     /// Create a new stub for a connection
     ///
     /// - Parameter context: The context for this connection
-    public init(context: NativeRPCContext) {
+    init(context: NativeRPCContext) {
         self.context = context
         self.connectionId = UUID().uuidString
         
@@ -106,7 +106,7 @@ public final class NativeRPCStub: @unchecked Sendable {
     /// - Parameter name: The service name
     /// - Returns: The service instance
     /// - Throws: `NativeRPCError` if service not found or connection type not supported
-    public func service(named name: String) throws -> NativeRPCService {
+    func service(named name: String) throws -> NativeRPCService {
         // Check if service is already instantiated
         var existingService: NativeRPCService?
         queue.sync {
@@ -143,13 +143,11 @@ public final class NativeRPCStub: @unchecked Sendable {
             }
             
             // Create new instance
-            let instance = serviceType.init(context: context)
-            if let service = instance as? NativeRPCService {
-                service.stub = self
-                services[name] = service
-                newService = service
-                wasCreated = true
-            }
+            let service = serviceType.init(context: context)
+            service.stub = self
+            services[name] = service
+            newService = service
+            wasCreated = true
         }
         
         guard let service = newService else {
@@ -169,7 +167,7 @@ public final class NativeRPCStub: @unchecked Sendable {
     /// Handle an incoming message from the client
     ///
     /// - Parameter data: The raw JSON message data
-    public func handleIncomingMessage(_ data: Data) {
+    func handleIncomingMessage(_ data: Data) {
         Task {
             do {
                 let message = try NativeRPCMessageParser.parse(data)
@@ -319,6 +317,9 @@ public final class NativeRPCStub: @unchecked Sendable {
             return
         }
         
+        // Capture service safely — NativeRPCStub manages service lifecycle
+        // and ensures thread-safe access via its internal queue
+        nonisolated(unsafe) let capturedService = service
         queue.async(flags: .barrier) { [weak self] in
             guard let self = self else { return }
             
@@ -329,7 +330,7 @@ public final class NativeRPCStub: @unchecked Sendable {
             
             // Notify service if this is the first subscriber
             if isFirstSubscriber {
-                service.onStartObserving(event: eventName)
+                capturedService.onStartObserving(event: eventName)
             }
             
             // Notify interceptors
@@ -383,7 +384,7 @@ public final class NativeRPCStub: @unchecked Sendable {
     /// The event is only sent if the client has subscribed to it.
     ///
     /// - Parameter notification: The event notification to send
-    public func sendEvent(_ notification: NativeRPCNotification) {
+    func sendEvent(_ notification: NativeRPCNotification) {
         queue.async { [weak self] in
             guard let self = self else { return }
             
@@ -427,7 +428,7 @@ public final class NativeRPCStub: @unchecked Sendable {
     }
     
     /// Convenience method to send event with service, event name, and params
-    public func sendEvent(service: String, event: String, params: Any? = nil) {
+    func sendEvent(service: String, event: String, params: Any? = nil) {
         let notification = NativeRPCNotification(service: service, event: event, params: params)
         sendEvent(notification)
     }
@@ -478,7 +479,7 @@ public final class NativeRPCStub: @unchecked Sendable {
     // MARK: - Lifecycle
     
     /// Notify all services that app entered foreground
-    public func onAppForeground() {
+    func onAppForeground() {
         queue.sync {
             for service in services.values {
                 service.onForeground()
@@ -487,7 +488,7 @@ public final class NativeRPCStub: @unchecked Sendable {
     }
     
     /// Notify all services that app entered background
-    public func onAppBackground() {
+    func onAppBackground() {
         queue.sync {
             for service in services.values {
                 service.onBackground()
@@ -498,7 +499,7 @@ public final class NativeRPCStub: @unchecked Sendable {
     /// Shutdown the stub and destroy all service instances
     ///
     /// Call this when the connection closes.
-    public func shutdown() {
+    func shutdown() {
         // Capture context before async to avoid race
         let ctx = interceptorContext
         
@@ -526,7 +527,7 @@ public final class NativeRPCStub: @unchecked Sendable {
     // MARK: - Introspection
     
     /// Get list of instantiated service names for this connection
-    public func getActiveServiceNames() -> [String] {
+    func getActiveServiceNames() -> [String] {
         var result: [String] = []
         queue.sync {
             result = Array(services.keys)
@@ -535,7 +536,7 @@ public final class NativeRPCStub: @unchecked Sendable {
     }
     
     /// Get list of active subscriptions for this connection
-    public func getActiveSubscriptions() -> [String] {
+    func getActiveSubscriptions() -> [String] {
         var result: [String] = []
         queue.sync {
             result = subscriptions.filter { $0.value > 0 }.map { $0.key }
