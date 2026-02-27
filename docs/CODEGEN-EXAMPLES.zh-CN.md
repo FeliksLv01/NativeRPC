@@ -1,8 +1,8 @@
-# NativeRPC Code Generator Examples
+# NativeRPC 代码生成器示例
 
-This document shows the code generation workflow from TypeScript interface definitions to multi-language outputs.
+本文档展示从 TypeScript 接口定义到多语言输出的代码生成流程。
 
-## Input: TypeScript Service Definition
+## 输入: TypeScript 服务定义
 
 ```typescript
 /**
@@ -12,22 +12,22 @@ This document shows the code generation workflow from TypeScript interface defin
  * @serviceName counter
  */
 export interface ICounterService {
-  /** Get the current counter value */
+  /** 获取当前计数值 */
   getValue(): number;
   
-  /** Increment the counter by 1 */
+  /** 计数器加 1 */
   increment(): number;
   
-  /** Add a value to the counter */
+  /** 给计数器加一个值 */
   add(args: { value: number }): number;
   
-  /** Get value with simulated network delay */
+  /** 模拟网络延迟获取值 */
   getValueDelayed(args: { delayMs: number }): Promise<number>;
   
-  /** Perform an async add operation */
+  /** 异步加法操作 */
   addAsync(args: { value: number; delayMs?: number }): Promise<CounterResult>;
   
-  /** Emitted when the counter value changes */
+  /** 计数值变化时触发 */
   onCountChanged(): Event<CountChangedPayload>;
 }
 
@@ -53,7 +53,7 @@ export interface CountChangedPayload {
 
 ---
 
-## Output: Kotlin (Server Stub)
+## 输出: Kotlin (服务端 Stub)
 
 ```kotlin
 package com.itoken.team
@@ -97,27 +97,27 @@ class CounterRPCService(context: NativeRPCContext? = null) : NativeRPCService() 
 
     override fun definition() = serviceDefinition {
         Function<Double>("getValue") {
-            // TODO: Implement getValue
+            // TODO: 实现 getValue
             throw NotImplementedError("Not implemented: getValue")
         }
         
         Function<Double>("increment") {
-            // TODO: Implement increment
+            // TODO: 实现 increment
             throw NotImplementedError("Not implemented: increment")
         }
         
         Function<AddParams, Double>("add") { params ->
-            // TODO: Implement add
+            // TODO: 实现 add
             throw NotImplementedError("Not implemented: add")
         }
         
         AsyncFunction<GetValueDelayedParams, Double>("getValueDelayed") { params ->
-            // TODO: Implement getValueDelayed
+            // TODO: 实现 getValueDelayed
             throw NotImplementedError("Not implemented: getValueDelayed")
         }
         
         AsyncFunction<AddAsyncParams, CounterResult>("addAsync") { params ->
-            // TODO: Implement addAsync
+            // TODO: 实现 addAsync
             throw NotImplementedError("Not implemented: addAsync")
         }
         
@@ -129,12 +129,12 @@ class CounterRPCService(context: NativeRPCContext? = null) : NativeRPCService() 
     }
 }
 
-// Registration: NativeRPCServiceCenter.register(CounterRPCService.Factory)
+// 注册: NativeRPCServiceCenter.register(CounterRPCService.Factory)
 ```
 
 ---
 
-## Output: Dart (Client)
+## 输出: Dart (客户端)
 
 ```dart
 import 'package:native_rpc_flutter/native_rpc_flutter.dart';
@@ -189,35 +189,35 @@ enum CounterOperation {
 }
 
 class CounterRPCService {
-  /// Get the current counter value
+  /// 获取当前计数值
   static Future<double> getValue() async {
     return await NativeRPC.call<double>('counter.getValue');
   }
 
-  /// Increment the counter by 1
+  /// 计数器加 1
   static Future<double> increment() async {
     return await NativeRPC.call<double>('counter.increment');
   }
 
-  /// Add a value to the counter
+  /// 给计数器加一个值
   static Future<double> add({ required double value }) async {
     final params = <String, dynamic>{'value': value};
     return await NativeRPC.call<double>('counter.add', params);
   }
 
-  /// Get value with simulated network delay
+  /// 模拟网络延迟获取值
   static Future<double> getValueDelayed({ required double delayMs }) async {
     final params = <String, dynamic>{'delayMs': delayMs};
     return await NativeRPC.call<double>('counter.getValueDelayed', params);
   }
 
-  /// Perform an async add operation
+  /// 异步加法操作
   static Future<CounterResult> addAsync({ required double value, double? delayMs }) async {
     final params = <String, dynamic>{'value': value, 'delayMs': delayMs};
     return await NativeRPC.call<CounterResult>('counter.addAsync', params);
   }
 
-  /// Emitted when the counter value changes
+  /// 计数值变化时触发
   static Stream<dynamic> get onCountChanged {
     return NativeRPC.stream('counter.countChanged');
   }
@@ -226,7 +226,7 @@ class CounterRPCService {
 
 ---
 
-## Output: TypeScript (Client)
+## 输出: TypeScript (客户端)
 
 ```typescript
 export interface CounterResult {
@@ -288,48 +288,69 @@ export interface NativeRPCConnection {
 
 ---
 
-## How Code Generator Works
+## 代码生成器工作原理
 
-### Architecture Overview
+### 架构概览
 
+```mermaid
+flowchart TB
+    subgraph Input
+        TS["TypeScript 接口<br/>@service, @serviceName"]
+    end
+    
+    subgraph Processing
+        Parser["Parser<br/><small>TypeScript Compiler API</small>"]
+        IR["ServiceModule<br/><small>中间表示 IR</small>"]
+        Validator["Validator<br/><small>校验类型、命名冲突</small>"]
+    end
+    
+    subgraph Renderers
+        Swift["Swift Renderer"]
+        Kotlin["Kotlin Renderer"]
+        Dart["Dart Renderer"]
+        TSRenderer["TS Renderer"]
+    end
+    
+    subgraph Output
+        SwiftFile[".swift<br/><small>服务端</small>"]
+        KotlinFile[".kt<br/><small>服务端</small>"]
+        DartFile[".dart<br/><small>客户端</small>"]
+        TSFile[".ts<br/><small>客户端</small>"]
+    end
+    
+    TS --> Parser
+    Parser --> IR
+    IR --> Validator
+    Validator --> Swift
+    Validator --> Kotlin
+    Validator --> Dart
+    Validator --> TSRenderer
+    Swift --> SwiftFile
+    Kotlin --> KotlinFile
+    Dart --> DartFile
+    TSRenderer --> TSFile
 ```
-TypeScript Interface (@service, @serviceName)
-        |
-        v
-    [Parser]  <-- TypeScript Compiler API (3-pass scanning)
-        |
-        v
-    [ServiceModule]  <-- Intermediate Representation (IR)
-        |
-        v
-    [Validator]  <-- Check types, naming conflicts
-        |
-        +---> [Swift Renderer]      ---> .swift (Server Stub)
-        +---> [Kotlin Renderer]     ---> .kt (Server Stub)  
-        +---> [Dart Renderer]       ---> .dart (Client)
-        +---> [TypeScript Renderer] ---> .ts (Client)
-```
 
-### Three-Pass Parsing Strategy
+### 三遍扫描策略
 
-| Pass | Target | Description |
-|------|--------|-------------|
-| Pass 1 | Enum Types | Parse all `enum` definitions |
-| Pass 2 | Custom Types | Parse non-`@service` interfaces |
-| Pass 3 | Service Interfaces | Parse `@service` marked interfaces |
+| 遍次 | 目标 | 说明 |
+|------|------|------|
+| Pass 1 | Enum 类型 | 解析所有 `enum` 定义 |
+| Pass 2 | 自定义类型 | 解析非 `@service` 的 interface |
+| Pass 3 | 服务接口 | 解析标记 `@service` 的 interface |
 
-### Method Type Inference
+### 方法类型自动推断
 
-The generator automatically infers method types from return types:
+生成器根据返回类型自动推断方法类型：
 
 ```typescript
-getValue(): number           // -> Sync method
-fetchData(): Promise<Data>   // -> Async method  
-onChanged(): Event<Payload>  // -> Event
-reset(): void                // -> Void method
+getValue(): number           // → 同步方法
+fetchData(): Promise<Data>   // → 异步方法  
+onChanged(): Event<Payload>  // → 事件
+reset(): void                // → Void 方法
 ```
 
-### Type Mapping
+### 类型映射表
 
 | TypeScript | Swift | Kotlin | Dart |
 |------------|-------|--------|------|
@@ -339,17 +360,17 @@ reset(): void                // -> Void method
 | `T[]` | `[T]` | `List<T>` | `List<T>` |
 | `T \| null` | `T?` | `T?` | `T?` |
 
-### Incremental Merge (Swift/Kotlin)
+### 增量合并 (Swift/Kotlin)
 
-For server stubs, the generator preserves existing implementations:
+服务端 Stub 支持增量更新，保留已有实现：
 
-- Existing method implementations are preserved
-- New methods get TODO placeholders
-- Removed methods are reported (implementations will be lost)
+- 已有方法的实现代码会被保留
+- 新方法生成 TODO 占位符
+- 删除的方法会报告警告（实现代码将丢失）
 
 ---
 
-## Usage
+## 使用方法
 
 ```bash
 cd codegen
@@ -358,7 +379,7 @@ npm run build
 npm run generate -- generate --config examples/config.json
 ```
 
-### Configuration Example
+### 配置文件示例
 
 ```json
 {
@@ -388,17 +409,17 @@ npm run generate -- generate --config examples/config.json
 
 ---
 
-## Summary
+## 总结
 
-| Output | Type | Purpose |
-|--------|------|---------|
-| **Kotlin** | Server Stub | DSL-based service definition with Factory pattern |
-| **Dart** | Client | Static methods, Stream-based event subscription |
-| **TypeScript** | Client | Connection-injected instance methods |
+| 输出 | 类型 | 用途 |
+|------|------|------|
+| **Kotlin** | 服务端 Stub | 基于 DSL 的服务定义，Factory 模式，事件发送器 |
+| **Dart** | 客户端 | 静态方法调用，Stream 事件订阅 |
+| **TypeScript** | 客户端 | 基于 Connection 实例的方法调用 |
 
-The code generator provides:
+代码生成器的特性：
 
-1. **Type Safety** - Generated code is fully typed
-2. **Incremental Updates** - Server stubs preserve existing implementations
-3. **Multi-Platform** - Single source generates all platforms
-4. **Convention over Configuration** - Sensible defaults with customization options
+1. **类型安全** - 生成的代码完全类型化
+2. **增量更新** - 服务端 Stub 保留已有实现
+3. **多平台** - 单一源文件生成所有平台代码
+4. **约定优于配置** - 合理的默认值，支持自定义
