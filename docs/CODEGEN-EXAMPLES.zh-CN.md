@@ -331,26 +331,150 @@ flowchart TB
     TSRenderer --> TSFile
 ```
 
-### 三遍扫描策略
+---
+
+### 第一步：TypeScript 代码分析 (Parser)
+
+代码生成器使用 **TypeScript Compiler API** 分析源代码，通过 AST（抽象语法树）提取类型信息。
+
+#### 三遍扫描策略
+
+```mermaid
+flowchart LR
+    subgraph "Pass 1"
+        E1[扫描 enum] --> E2[收集枚举定义]
+    end
+    
+    subgraph "Pass 2"
+        T1[扫描 interface] --> T2{有 @service?}
+        T2 -->|否| T3[作为自定义类型收集]
+        T2 -->|是| T4[跳过，等 Pass 3]
+    end
+    
+    subgraph "Pass 3"
+        S1[扫描 @service 接口] --> S2[解析方法签名]
+        S2 --> S3[解析事件定义]
+        S3 --> S4[关联依赖类型]
+    end
+    
+    E2 --> T1
+    T3 --> S1
+    T4 --> S1
+```
 
 | 遍次 | 目标 | 说明 |
 |------|------|------|
-| Pass 1 | Enum 类型 | 解析所有 `enum` 定义 |
-| Pass 2 | 自定义类型 | 解析非 `@service` 的 interface |
-| Pass 3 | 服务接口 | 解析标记 `@service` 的 interface |
+| Pass 1 | Enum 类型 | 解析所有 `enum` 定义，建立 enum 名称映射 |
+| Pass 2 | 自定义类型 | 解析非 `@service` 的 interface，此时可以引用已解析的 enum |
+| Pass 3 | 服务接口 | 解析 `@service` 标记的 interface，收集方法、事件、依赖类型 |
 
-### 方法类型自动推断
-
-生成器根据返回类型自动推断方法类型：
+#### 解析过程示例
 
 ```typescript
-getValue(): number           // → 同步方法
-fetchData(): Promise<Data>   // → 异步方法  
-onChanged(): Event<Payload>  // → 事件
-reset(): void                // → Void 方法
+// 输入
+export interface ICounterService {
+  getValue(): number;
+  addAsync(args: { value: number }): Promise<CounterResult>;
+  onCountChanged(): Event<CountChangedPayload>;
+}
 ```
 
-### 类型映射表
+Parser 使用 `ts.createProgram()` 创建程序，然后遍历 AST：
+
+```typescript
+// 1. 创建 TypeScript 程序
+const program = ts.createProgram(filePaths, compilerOptions);
+const checker = program.getTypeChecker();
+
+// 2. 遍历 AST 节点
+ts.forEachChild(sourceFile, node => {
+  if (ts.isInterfaceDeclaration(node)) {
+    // 检查 JSDoc 标签
+    const symbol = checker.getSymbolAtLocation(node.name);
+    const jsDocTags = symbol.getJsDocTags(); // 获取 @service, @serviceName
+    
+    // 遍历接口成员
+    for (const member of node.members) {
+      if (ts.isMethodSignature(member)) {
+        // 解析方法签名
+        const returnType = member.type.getText(); // "number", "Promise<T>", "Event<T>"
+      }
+    }
+  }
+});
+```
+
+#### 方法类型自动推断
+
+Parser 根据返回类型自动识别方法类型：
+
+```typescript
+// 根据返回类型推断方法类型
+getValue(): number           // → 同步方法 (MethodKind.Sync)
+fetchData(): Promise<Data>   // → 异步方法 (MethodKind.Async)
+onChanged(): Event<Payload>  // → 事件 (转为 ServiceEvent)
+reset(): void                // → Void 方法 (MethodKind.Void)
+```
+
+#### 中间表示 (ServiceModule)
+
+解析后生成统一的 IR 结构：
+
+```typescript
+interface ServiceModule {
+  name: string;              // "CounterService"
+  serviceName: string;       // "counter" (来自 @serviceName)
+  documentation: string;     // JSDoc 注释
+  methods: ServiceMethod[];  // 所有方法（同步、异步、void）
+  events: ServiceEvent[];    // 所有事件
+  customTypes: CustomType[]; // 依赖的自定义类型
+  enums: EnumType[];         // 依赖的枚举
+}
+```
+
+---
+
+### 第二步：代码生成 (Renderer)
+
+每种目标语言有独立的 **Renderer**，使用 **Mustache 模板引擎** 生成代码。
+
+#### 生成流程
+
+```mermaid
+flowchart LR
+    IR[ServiceModule] --> TT[TypeTransformer<br/>类型转换]
+    TT --> VM[TemplateView<br/>视图模型]
+    VM --> MT[Mustache 模板]
+    MT --> Code[生成代码]
+```
+
+#### 1. 类型转换 (TypeTransformer)
+
+每种语言有独立的类型转换器，将 IR 中的抽象类型转为目标语言类型：
+
+```typescript
+// Swift 类型转换器
+class SwiftTypeTransformer {
+  convert(type: ValueType): string {
+    if (type.kind === 'primitive') {
+      switch (type.value) {
+        case 'string':  return 'String';
+        case 'number':  return 'Double';
+        case 'boolean': return 'Bool';
+      }
+    }
+    if (type.kind === 'array') {
+      return `[${this.convert(type.elementType)}]`;
+    }
+    if (type.kind === 'optional') {
+      return `${this.convert(type.wrappedType)}?`;
+    }
+    // ...
+  }
+}
+```
+
+**类型映射表：**
 
 | TypeScript | Swift | Kotlin | Dart |
 |------------|-------|--------|------|
@@ -360,13 +484,128 @@ reset(): void                // → Void 方法
 | `T[]` | `[T]` | `List<T>` | `List<T>` |
 | `T \| null` | `T?` | `T?` | `T?` |
 
-### 增量合并 (Swift/Kotlin)
+#### 2. 视图模型 (TemplateView)
 
-服务端 Stub 支持增量更新，保留已有实现：
+Renderer 将 IR 转换为 Mustache 友好的视图模型：
 
-- 已有方法的实现代码会被保留
-- 新方法生成 TODO 占位符
-- 删除的方法会报告警告（实现代码将丢失）
+```typescript
+interface TemplateView {
+  className: string;        // "CounterRPCService"
+  serviceName: string;      // "counter"
+  syncMethods: MethodView[];
+  asyncMethods: MethodView[];
+  events: EventView[];
+  customTypes: CustomTypeView[];
+  enums: EnumView[];
+}
+```
+
+#### 3. Mustache 模板
+
+模板使用 `{{}}` 语法插入变量，`{{#}}` 遍历数组：
+
+```mustache
+// Kotlin 模板示例 (templates/kotlin/service.mustache)
+class {{className}}(context: NativeRPCContext? = null) : NativeRPCService() {
+    
+    override fun definition() = serviceDefinition {
+        {{#syncMethods}}
+        Function<{{returnType}}>("{{methodName}}") {
+            // TODO: Implement {{methodName}}
+        }
+        {{/syncMethods}}
+        
+        {{#asyncMethods}}
+        AsyncFunction<{{returnType}}>("{{methodName}}") {
+            // TODO: Implement {{methodName}}
+        }
+        {{/asyncMethods}}
+        
+        {{#events}}
+        Events("{{eventName}}")
+        {{/events}}
+    }
+}
+```
+
+#### 4. 渲染输出
+
+Mustache 将 TemplateView 数据填充到模板中：
+
+```typescript
+// Renderer 核心代码
+render(module: ServiceModule): string {
+  const template = fs.readFileSync(templatePath, 'utf-8');
+  const view = this.buildView(module);  // IR → TemplateView
+  return Mustache.render(template, view);
+}
+```
+
+---
+
+### 第三步：增量合并 (Merger)
+
+Swift/Kotlin 服务端 Stub 支持**增量更新**，保留手写的方法实现。
+
+#### 合并流程
+
+```mermaid
+flowchart TB
+    A[读取已有文件] --> B[解析方法实现]
+    B --> C[生成新代码结构]
+    C --> D{方法是否存在?}
+    D -->|存在| E[保留原有实现]
+    D -->|新增| F[生成 TODO 占位]
+    D -->|删除| G[报告警告]
+    E --> H[输出合并后代码]
+    F --> H
+```
+
+#### 示例
+
+假设原有实现：
+
+```kotlin
+Function<Double>("getValue") {
+    return counter.value  // 手写的实现
+}
+```
+
+重新生成后，实现代码被保留：
+
+```kotlin
+Function<Double>("getValue") {
+    return counter.value  // 实现被保留！
+}
+
+Function<Double>("newMethod") {
+    // TODO: Implement newMethod  // 新方法生成 TODO
+}
+```
+
+---
+
+### 完整处理流程
+
+```mermaid
+sequenceDiagram
+    participant TS as TypeScript 源码
+    participant Parser as Parser
+    participant IR as ServiceModule
+    participant TT as TypeTransformer
+    participant TPL as Mustache 模板
+    participant Output as 输出文件
+    
+    TS->>Parser: 读取源文件
+    Parser->>Parser: Pass 1: 收集 enum
+    Parser->>Parser: Pass 2: 收集 interface
+    Parser->>Parser: Pass 3: 解析 @service
+    Parser->>IR: 生成 ServiceModule
+    
+    IR->>TT: 转换类型
+    TT->>TPL: 填充模板变量
+    TPL->>Output: 渲染生成代码
+```
 
 ---
 
