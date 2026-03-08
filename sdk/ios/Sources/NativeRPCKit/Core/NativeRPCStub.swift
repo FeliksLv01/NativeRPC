@@ -193,7 +193,7 @@ final class NativeRPCStub: @unchecked Sendable {
                         service: request.service,
                         methodName: request.eventName,
                         type: .subscribe,
-                        params: nil
+                        params: request.params
                     )
                     interceptors.willProcessRequest(requestInfo, context: interceptorContext)
                     handleSubscribe(request, requestInfo: requestInfo, startTime: startTime)
@@ -330,7 +330,7 @@ final class NativeRPCStub: @unchecked Sendable {
             
             // Notify service if this is the first subscriber
             if isFirstSubscriber {
-                capturedService.onStartObserving(event: eventName)
+                capturedService.onStartObserving(event: eventName, params: request.params)
             }
             
             // Notify interceptors

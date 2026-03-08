@@ -251,8 +251,8 @@ open class NativeRPCService: NativeRPCServiceProtocol {
     // MARK: - Subscription Handling
     
     /// Called when a client starts observing events
-    public func onStartObserving(event: String? = nil) {
-        definitionContainer.startObserving(event: event)
+    public func onStartObserving(event: String? = nil, params: [String: Any]? = nil) {
+        definitionContainer.startObserving(event: event, params: params)
     }
     
     /// Called when a client stops observing events

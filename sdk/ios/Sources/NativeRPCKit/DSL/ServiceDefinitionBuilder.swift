@@ -43,6 +43,9 @@ public final class ServiceDefinitionContainer {
     private var startObservingCallbacks: [String?: [() -> Void]] = [:]
     private var stopObservingCallbacks: [String?: [() -> Void]] = [:]
     
+    /// Event observing callbacks that receive subscription params
+    private var startObservingWithParamsCallbacks: [String?: [([String: Any]?) -> Void]] = [:]
+    
     /// Lifecycle callbacks
     private var lifecycleCallbacks: [LifecycleType: [() -> Void]] = [:]
     
@@ -85,6 +88,19 @@ public final class ServiceDefinitionContainer {
                 var callbacks = stopObservingCallbacks[observingDef.event] ?? []
                 callbacks.append(observingDef.body)
                 stopObservingCallbacks[observingDef.event] = callbacks
+            }
+            
+        case let observingWithParamsDef as EventObservingWithParamsDefinition:
+            switch observingWithParamsDef.type {
+            case .startObserving:
+                var callbacks = startObservingWithParamsCallbacks[observingWithParamsDef.event] ?? []
+                callbacks.append(observingWithParamsDef.body)
+                startObservingWithParamsCallbacks[observingWithParamsDef.event] = callbacks
+            case .stopObserving:
+                // For stopObserving with params, wrap as zero-arg callback (params not available on stop)
+                var callbacks = stopObservingCallbacks[observingWithParamsDef.event] ?? []
+                callbacks.append { observingWithParamsDef.body(nil) }
+                stopObservingCallbacks[observingWithParamsDef.event] = callbacks
             }
             
         case let lifecycleDef as LifecycleDefinition:
@@ -168,7 +184,7 @@ public final class ServiceDefinitionContainer {
     }
     
     /// Trigger start observing callbacks
-    public func startObserving(event: String? = nil) {
+    public func startObserving(event: String? = nil, params: [String: Any]? = nil) {
         // Call global callbacks (nil key)
         if let globalCallbacks = startObservingCallbacks[nil] {
             for callback in globalCallbacks {
@@ -176,10 +192,26 @@ public final class ServiceDefinitionContainer {
             }
         }
         
+        // Call global params-aware callbacks (nil key)
+        if let globalParamsCallbacks = startObservingWithParamsCallbacks[nil] {
+            for callback in globalParamsCallbacks {
+                callback(params)
+            }
+        }
+        
         // Call event-specific callbacks
-        if let event = event, let eventCallbacks = startObservingCallbacks[event] {
-            for callback in eventCallbacks {
-                callback()
+        if let event = event {
+            if let eventCallbacks = startObservingCallbacks[event] {
+                for callback in eventCallbacks {
+                    callback()
+                }
+            }
+            
+            // Call event-specific params-aware callbacks
+            if let eventParamsCallbacks = startObservingWithParamsCallbacks[event] {
+                for callback in eventParamsCallbacks {
+                    callback(params)
+                }
             }
         }
     }

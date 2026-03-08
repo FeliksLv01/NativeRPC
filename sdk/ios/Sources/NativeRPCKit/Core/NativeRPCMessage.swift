@@ -39,7 +39,8 @@ public enum NativeRPCMessageParser {
                   let event = paramsDict["event"] as? String else {
                 throw NativeRPCError.invalidParams("rpc.subscribe requires params.event")
             }
-            return .subscribe(NativeRPCSubscribeRequest(id: id, event: event))
+            let subscribeParams = paramsDict["params"] as? [String: Any]
+            return .subscribe(NativeRPCSubscribeRequest(id: id, event: event, params: subscribeParams))
         }
         
         if method == "rpc.unsubscribe" {
@@ -230,10 +231,12 @@ public struct NativeRPCNotification: Encodable, Sendable {
 
 /// A subscribe request
 ///
-/// Format: {"id": "uuid", "method": "rpc.subscribe", "params": {"event": "service.event"}}
-public struct NativeRPCSubscribeRequest: Sendable {
+/// Format: {"id": "uuid", "method": "rpc.subscribe", "params": {"event": "service.event", "params": {...}}}
+public struct NativeRPCSubscribeRequest: @unchecked Sendable {
     public let id: String
     public let event: String
+    /// Optional parameters passed with the subscription (e.g., topics for socketMessage)
+    public let params: [String: Any]?
     
     /// Get service name from event
     public var service: String {
@@ -250,9 +253,10 @@ public struct NativeRPCSubscribeRequest: Sendable {
         return parts.last.map(String.init) ?? event
     }
     
-    public init(id: String = UUID().uuidString, event: String) {
+    public init(id: String = UUID().uuidString, event: String, params: [String: Any]? = nil) {
         self.id = id
         self.event = event
+        self.params = params
     }
 }
 

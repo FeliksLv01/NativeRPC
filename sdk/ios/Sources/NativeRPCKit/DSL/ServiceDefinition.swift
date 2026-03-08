@@ -302,6 +302,19 @@ public struct EventObservingDefinition: AnyServiceDefinitionElement {
     }
 }
 
+/// Definition for event observation callbacks that receive subscription params
+public struct EventObservingWithParamsDefinition: AnyServiceDefinitionElement {
+    public let type: EventObservingType
+    public let event: String?  // nil means all events
+    public let body: ([String: Any]?) -> Void
+    
+    public init(type: EventObservingType, event: String?, body: @escaping ([String: Any]?) -> Void) {
+        self.type = type
+        self.event = event
+        self.body = body
+    }
+}
+
 /// Lifecycle event types
 public enum LifecycleType {
     case create

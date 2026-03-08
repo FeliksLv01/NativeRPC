@@ -274,6 +274,19 @@ public func OnStartObserving(_ event: String, _ body: @escaping () -> Void) -> E
     EventObservingDefinition(type: .startObserving, event: event, body: body)
 }
 
+/// Called when a listener starts observing a specific event, receiving subscription params
+///
+/// Example:
+/// ```swift
+/// OnStartObserving("socketMessage") { params in
+///     let topics = params?["topics"] as? [String] ?? []
+///     // Set up subscription with topics
+/// }
+/// ```
+public func OnStartObserving(_ event: String, _ body: @escaping ([String: Any]?) -> Void) -> EventObservingWithParamsDefinition {
+    EventObservingWithParamsDefinition(type: .startObserving, event: event, body: body)
+}
+
 /// Called when a listener stops observing any event
 public func OnStopObserving(_ body: @escaping () -> Void) -> EventObservingDefinition {
     EventObservingDefinition(type: .stopObserving, event: nil, body: body)
