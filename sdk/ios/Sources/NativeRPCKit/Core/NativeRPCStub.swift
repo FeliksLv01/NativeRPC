@@ -14,6 +14,26 @@ protocol NativeRPCStubDelegate: AnyObject {
     func sendMessage(_ jsonString: String)
 }
 
+// MARK: - ServiceHolder
+
+/// Holds a service and its definition side-by-side.
+///
+/// This is the key to avoiding retain cycles: the service does NOT hold its own
+/// definition. The stub holds both via this holder, forming a tree-shaped ownership:
+///
+/// ```
+/// ServiceHolder (owned by Stub)
+///   ├── service: NativeRPCService      (strong)
+///   └── definition: ServiceDefinitionContainer  (strong)
+///         └── closures ──strong──> service
+/// ```
+///
+/// No cycle: service does not reference definition or holder.
+struct ServiceHolder {
+    let service: NativeRPCService
+    let definition: ServiceDefinitionContainer
+}
+
 // MARK: - NativeRPCStub
 
 /// Per-connection message handler that manages service instances.
@@ -24,20 +44,7 @@ protocol NativeRPCStubDelegate: AnyObject {
 /// - Manages event subscriptions for this connection
 /// - Destroys all service instances when the connection closes
 ///
-/// Usage:
-/// ```swift
-/// let context = NativeRPCContext(connection: connection, connectionType: .flutter)
-/// let stub = NativeRPCStub(context: context)
-/// stub.delegate = connection
-///
-/// // When receiving a message from client:
-/// stub.handleIncomingMessage(data)
-///
-/// // When connection closes:
-/// stub.shutdown()
-/// ```
-///
-/// Note: Marked `@unchecked Sendable` because mutable state (`services`, `subscriptions`)
+/// Note: Marked `@unchecked Sendable` because mutable state (`holders`, `subscriptions`)
 /// is protected by the internal `queue` (concurrent DispatchQueue with barrier writes).
 /// Safety invariant: All mutations use `.barrier` flag, reads use `queue.sync`.
 final class NativeRPCStub: @unchecked Sendable {
@@ -50,8 +57,9 @@ final class NativeRPCStub: @unchecked Sendable {
     /// Delegate to send outgoing messages
     weak var delegate: NativeRPCStubDelegate?
     
-    /// Instantiated services for this connection, keyed by service name
-    private var services: [String: NativeRPCService] = [:]
+    /// Service holders for this connection, keyed by service name.
+    /// Each holder owns both the service instance and its definition.
+    private var holders: [String: ServiceHolder] = [:]
     
     /// Event subscriptions for this connection: [eventFullName: referenceCount]
     /// where eventFullName = "service.event"
@@ -98,22 +106,22 @@ final class NativeRPCStub: @unchecked Sendable {
     
     // MARK: - Service Access
     
-    /// Get or create a service instance for this connection
+    /// Get or create a service holder for this connection
     ///
     /// Services are lazily instantiated on first access and cached for the
     /// lifetime of the connection.
     ///
     /// - Parameter name: The service name
-    /// - Returns: The service instance
+    /// - Returns: The service holder (service + definition)
     /// - Throws: `NativeRPCError` if service not found or connection type not supported
-    func service(named name: String) throws -> NativeRPCService {
-        // Check if service is already instantiated
-        var existingService: NativeRPCService?
+    func holder(named name: String) throws -> ServiceHolder {
+        // Check if holder already exists
+        var existingHolder: ServiceHolder?
         queue.sync {
-            existingService = services[name]
+            existingHolder = holders[name]
         }
-        if let service = existingService {
-            return service
+        if let holder = existingHolder {
+            return holder
         }
         
         // Get the service type from the service center
@@ -132,34 +140,60 @@ final class NativeRPCStub: @unchecked Sendable {
             )
         }
         
-        // Create the service instance
-        var newService: NativeRPCService?
+        // Create the service and its definition
+        var resultHolder: ServiceHolder?
         var wasCreated = false
         queue.sync(flags: .barrier) {
             // Double-check in case another thread created it
-            if let existing = services[name] {
-                newService = existing
+            if let existing = holders[name] {
+                resultHolder = existing
                 return
             }
             
             // Create new instance
             let service = serviceType.init(context: context)
             service.stub = self
-            services[name] = service
-            newService = service
+            
+            // Build definition externally — service does NOT cache it
+            let definition = service.definition()
+            definition.setServiceName(type(of: service).serviceName)
+            
+            let holder = ServiceHolder(service: service, definition: definition)
+            holders[name] = holder
+            resultHolder = holder
             wasCreated = true
         }
         
-        guard let service = newService else {
+        guard let holder = resultHolder else {
             throw NativeRPCError.internalError("Failed to create service instance: \(name)")
         }
         
-        // Notify interceptors if service was just created
+        // Trigger lifecycle and interceptors outside the barrier
         if wasCreated {
+            holder.definition.triggerLifecycle(.create)
             interceptors.didCreateService(name, context: interceptorContext)
         }
         
-        return service
+        return holder
+    }
+    
+    // MARK: - Event Sending from Service
+    
+    /// Called by `NativeRPCService.emit()` / `sendEvent()`.
+    /// Validates that the event is declared and forwards to the event system.
+    func sendEventFromService(serviceName: String, event: String, data: Any?) throws {
+        // Look up the holder to validate the event
+        var holder: ServiceHolder?
+        queue.sync {
+            holder = holders[serviceName]
+        }
+        guard let holder else { return }
+        
+        guard holder.definition.hasEvent(event) else {
+            throw NativeRPCError.eventNotDeclared(event, service: serviceName)
+        }
+        
+        sendEvent(service: serviceName, event: event, params: data)
     }
     
     // MARK: - Message Handling
@@ -224,10 +258,10 @@ final class NativeRPCStub: @unchecked Sendable {
         let serviceName = request.service
         let methodName = request.methodName
         
-        // Get the service (creates if needed)
-        let service: NativeRPCService
+        // Get the holder (creates service + definition if needed)
+        let holder: ServiceHolder
         do {
-            service = try self.service(named: serviceName)
+            holder = try self.holder(named: serviceName)
         } catch let error as NativeRPCError {
             let duration = Date().timeIntervalSince(startTime)
             let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: error, duration: duration)
@@ -243,8 +277,8 @@ final class NativeRPCStub: @unchecked Sendable {
             return
         }
         
-        // Check if method exists
-        guard service.canHandle(method: methodName) else {
+        // Check if method exists via definition
+        guard holder.definition.canHandle(method: methodName) else {
             let error = NativeRPCError.methodNotFound(methodName, service: serviceName)
             let duration = Date().timeIntervalSince(startTime)
             let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: error, duration: duration)
@@ -253,12 +287,22 @@ final class NativeRPCStub: @unchecked Sendable {
             return
         }
         
-        // Get params
+        // Convert params to args array
         let params = request.params
+        let args: [Any]
+        if let paramsArray = params as? [Any] {
+            args = paramsArray
+        } else if let paramsDict = params as? [String: Any] {
+            args = [paramsDict]
+        } else if params != nil {
+            args = [params!]
+        } else {
+            args = []
+        }
         
         do {
-            // Call the method
-            let result = try await service.handleCall(method: methodName, params: params)
+            // Call the method via definition
+            let result = try await holder.definition.call(method: methodName, args: args)
             let duration = Date().timeIntervalSince(startTime)
             
             // Notify interceptors
@@ -288,10 +332,10 @@ final class NativeRPCStub: @unchecked Sendable {
         let eventName = request.eventName
         let eventFullName = request.event
         
-        // Get the service (creates if needed)
-        let service: NativeRPCService
+        // Get the holder (creates service + definition if needed)
+        let holder: ServiceHolder
         do {
-            service = try self.service(named: serviceName)
+            holder = try self.holder(named: serviceName)
         } catch let error as NativeRPCError {
             let duration = Date().timeIntervalSince(startTime)
             let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: error, duration: duration)
@@ -307,8 +351,8 @@ final class NativeRPCStub: @unchecked Sendable {
             return
         }
         
-        // Validate event is declared
-        guard service.definitionContainer.hasEvent(eventName) else {
+        // Validate event is declared via definition
+        guard holder.definition.hasEvent(eventName) else {
             let error = NativeRPCError.eventNotDeclared(eventName, service: serviceName)
             let duration = Date().timeIntervalSince(startTime)
             let responseInfo = NativeRPCResponseInfo.failure(id: request.id, error: error, duration: duration)
@@ -317,9 +361,8 @@ final class NativeRPCStub: @unchecked Sendable {
             return
         }
         
-        // Capture service safely — NativeRPCStub manages service lifecycle
-        // and ensures thread-safe access via its internal queue
-        nonisolated(unsafe) let capturedService = service
+        // Capture definition for observing callback
+        let definition = holder.definition
         queue.async(flags: .barrier) { [weak self] in
             guard let self = self else { return }
             
@@ -328,9 +371,9 @@ final class NativeRPCStub: @unchecked Sendable {
             let isFirstSubscriber = currentCount == 0
             self.subscriptions[eventFullName] = currentCount + 1
             
-            // Notify service if this is the first subscriber
+            // Notify definition if this is the first subscriber
             if isFirstSubscriber {
-                capturedService.onStartObserving(event: eventName, params: request.params)
+                definition.startObserving(event: eventName, params: request.params)
             }
             
             // Notify interceptors
@@ -360,9 +403,9 @@ final class NativeRPCStub: @unchecked Sendable {
             
             let noMoreSubscribers = newCount == 0
             
-            // Notify service if no more subscribers
-            if noMoreSubscribers, let service = self.services[serviceName] {
-                service.onStopObserving(event: eventName)
+            // Notify definition if no more subscribers
+            if noMoreSubscribers, let holder = self.holders[serviceName] {
+                holder.definition.stopObserving(event: eventName)
             }
             
             // Notify interceptors
@@ -481,8 +524,8 @@ final class NativeRPCStub: @unchecked Sendable {
     /// Notify all services that app entered foreground
     func onAppForeground() {
         queue.sync {
-            for service in services.values {
-                service.onForeground()
+            for holder in holders.values {
+                holder.definition.triggerLifecycle(.appEntersForeground)
             }
         }
     }
@@ -490,8 +533,8 @@ final class NativeRPCStub: @unchecked Sendable {
     /// Notify all services that app entered background
     func onAppBackground() {
         queue.sync {
-            for service in services.values {
-                service.onBackground()
+            for holder in holders.values {
+                holder.definition.triggerLifecycle(.appEntersBackground)
             }
         }
     }
@@ -507,11 +550,12 @@ final class NativeRPCStub: @unchecked Sendable {
             guard let self = self else { return }
             
             // Destroy all services and notify interceptors
-            for (name, service) in self.services {
-                service.destroy()
+            for (name, holder) in self.holders {
+                holder.definition.triggerLifecycle(.destroy)
+                holder.definition.teardown()
                 self.interceptors.didDestroyService(name, context: ctx)
             }
-            self.services.removeAll()
+            self.holders.removeAll()
             
             // Clear subscriptions
             self.subscriptions.removeAll()
@@ -530,7 +574,7 @@ final class NativeRPCStub: @unchecked Sendable {
     func getActiveServiceNames() -> [String] {
         var result: [String] = []
         queue.sync {
-            result = Array(services.keys)
+            result = Array(holders.keys)
         }
         return result.sorted()
     }

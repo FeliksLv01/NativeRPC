@@ -247,6 +247,24 @@ public final class ServiceDefinitionContainer {
         let asyncNames = Array(asyncFunctions.keys)
         return syncNames + asyncNames.filter { !syncNames.contains($0) }
     }
+    
+    // MARK: - Teardown
+    
+    /// Release all closures held by this container.
+    ///
+    /// After teardown, the container is inert — method calls return not-found,
+    /// events return false, and lifecycle/observing callbacks are no-ops.
+    /// This breaks any strong references closures may hold to external objects.
+    public func teardown() {
+        syncFunctions.removeAll()
+        asyncFunctions.removeAll()
+        constants.removeAll()
+        eventNames.removeAll()
+        startObservingCallbacks.removeAll()
+        stopObservingCallbacks.removeAll()
+        startObservingWithParamsCallbacks.removeAll()
+        lifecycleCallbacks.removeAll()
+    }
 }
 
 // MARK: - Service Definition Builder

@@ -30,31 +30,26 @@ public protocol NativeRPCServiceProtocol: AnyObject {
 /// Services are instantiated per-connection with a context that provides
 /// connection-scoped state and configuration.
 ///
-/// ## New Architecture (v2.1)
+/// ## Architecture (v3.0)
 ///
-/// Services are now:
-/// - **Registered by type** at app startup via `NativeRPCServiceCenter`
-/// - **Instantiated per-connection** when first called
-/// - **Destroyed** when the connection closes
+/// The definition returned by `definition()` is **not cached by the service itself**.
+/// Instead, the `NativeRPCStub` holds both the service and its definition via a
+/// `ServiceHolder`, forming a tree-shaped ownership graph with no retain cycles.
+/// This means closures in `definition()` can safely capture `self` without
+/// `[weak self]`.
 ///
 /// ```swift
-/// // Define your service
 /// class MyService: NativeRPCService {
-///     // Required: provide static service name for registration
 ///     override class var serviceName: String { "myService" }
 ///     
-///     // Required: init with context
 ///     required init(context: NativeRPCContext) {
 ///         super.init(context: context)
 ///     }
 ///     
 ///     @ServiceDefinitionBuilder
 ///     override func definition() -> ServiceDefinitionContainer {
-///         // Name() is optional - auto-inferred from serviceName
-///         
 ///         Function("getUserId") { () -> String? in
-///             // Access connection-scoped context
-///             self.context.get("userId")
+///             self.context.get("userId")  // no [weak self] needed
 ///         }
 ///         
 ///         AsyncFunction("fetchData") { (id: String) async throws -> Data in
@@ -65,31 +60,15 @@ public protocol NativeRPCServiceProtocol: AnyObject {
 ///     }
 /// }
 ///
-/// // Register at app startup
 /// NativeRPCServiceCenter.shared.register(MyService.self)
 /// ```
-///
-/// Note: Not marked `Sendable` intentionally — services are managed by `NativeRPCStub`
-/// which handles all synchronization internally via its concurrent queue.
-/// Mutable state (`stub`, `_definitionContainer`) is accessed in controlled ways:
-/// `stub` is set once on creation, and `_definitionContainer` is lazily initialized
-/// (race-safe via single-threaded access pattern within the stub's queue).
-///
-/// If your subclass needs to be passed across isolation boundaries explicitly,
-/// you can add `@unchecked Sendable` conformance to your subclass.
 open class NativeRPCService: NativeRPCServiceProtocol {
     
     // MARK: - Static Properties
     
     /// The unique name identifying this service.
     /// Override this in subclasses to provide the service name.
-    ///
-    /// Example:
-    /// ```swift
-    /// override class var serviceName: String { "counter" }
-    /// ```
     open class var serviceName: String {
-        // Default implementation returns the class name (lowercased first letter)
         let className = String(describing: self)
         guard let first = className.first else { return "unnamed" }
         return first.lowercased() + className.dropFirst()
@@ -97,13 +76,6 @@ open class NativeRPCService: NativeRPCServiceProtocol {
     
     /// Connection types this service supports.
     /// Override to restrict which connection types can use this service.
-    ///
-    /// Example:
-    /// ```swift
-    /// override class var supportedConnectionTypes: Set<NativeRPCConnectionType> {
-    ///     [.flutter, .webView]  // Only Flutter and WebView
-    /// }
-    /// ```
     open class var supportedConnectionTypes: Set<NativeRPCConnectionType> {
         [.flutter, .webView, .webSocket, .reactNative, .custom]
     }
@@ -116,22 +88,6 @@ open class NativeRPCService: NativeRPCServiceProtocol {
     /// Weak reference to the stub that owns this service
     weak var stub: NativeRPCStub?
     
-    /// Cached service definition container
-    private var _definitionContainer: ServiceDefinitionContainer?
-    
-    /// Get or build the definition container
-    public var definitionContainer: ServiceDefinitionContainer {
-        if _definitionContainer == nil {
-            _definitionContainer = definition()
-        }
-        return _definitionContainer!
-    }
-    
-    /// The service name (from definition or class property)
-    public var name: String {
-        return definitionContainer.serviceName
-    }
-    
     // MARK: - Initialization
     
     /// Create a new service instance with the given context.
@@ -141,44 +97,18 @@ open class NativeRPCService: NativeRPCServiceProtocol {
     /// - Parameter context: The connection context
     public required init(context: NativeRPCContext) {
         self.context = context
-        // Trigger create lifecycle
-        _ = definitionContainer  // Force lazy init
-        
-        // Always set service name from class property (Name() is no longer used)
-        definitionContainer.setServiceName(Self.serviceName)
-        
-        definitionContainer.triggerLifecycle(.create)
     }
     
     // MARK: - Definition (override in subclass)
     
     /// Override this method to define your service using the DSL.
     ///
-    /// Use `@ServiceDefinitionBuilder` attribute when overriding.
-    /// Note: `Name()` is optional - if not specified, the service name
-    /// will be automatically inferred from `serviceName` class property.
+    /// The returned `ServiceDefinitionContainer` is held externally by the stub,
+    /// not by this service instance. This means closures can safely capture `self`
+    /// without `[weak self]` — there is no retain cycle.
     @ServiceDefinitionBuilder
     open func definition() -> ServiceDefinitionContainer {
         // Empty definition - subclasses should override
-        // Service name will be auto-inferred from serviceName class property
-    }
-    
-    // MARK: - Lifecycle
-    
-    /// Called when the service is being destroyed
-    public func destroy() {
-        definitionContainer.triggerLifecycle(.destroy)
-        stub = nil
-    }
-    
-    /// Called when the app enters foreground
-    public func onForeground() {
-        definitionContainer.triggerLifecycle(.appEntersForeground)
-    }
-    
-    /// Called when the app enters background
-    public func onBackground() {
-        definitionContainer.triggerLifecycle(.appEntersBackground)
     }
     
     // MARK: - Event Sending
@@ -190,16 +120,12 @@ open class NativeRPCService: NativeRPCServiceProtocol {
     ///   - data: Optional event data
     /// - Throws: `NativeRPCError.eventNotDeclared` if event name not in `Events()`
     public func sendEvent(_ name: String, data: Any? = nil) throws {
-        guard definitionContainer.hasEvent(name) else {
-            throw NativeRPCError.eventNotDeclared(name, service: self.name)
-        }
-        
-        guard let stub = stub else {
-            // Service not attached to stub - silently ignore
-            return
-        }
-        
-        stub.sendEvent(service: self.name, event: name, params: data)
+        guard let stub = stub else { return }
+        try stub.sendEventFromService(
+            serviceName: Self.serviceName,
+            event: name,
+            data: data
+        )
     }
     
     /// Send an event without throwing (logs error if event not declared)
@@ -209,55 +135,6 @@ open class NativeRPCService: NativeRPCServiceProtocol {
         } catch {
             // Event not declared - silently ignore in emit
         }
-    }
-    
-    // MARK: - Method Handling
-    
-    /// Handle an incoming RPC call with params (JSON-RPC style)
-    /// params can be: nil, dict, or array
-    public func handleCall(method: String, params: Any?) async throws -> Any? {
-        // Convert params to args array for backward compatibility with DSL
-        let args: [Any]
-        if let paramsArray = params as? [Any] {
-            args = paramsArray
-        } else if let paramsDict = params as? [String: Any] {
-            // Pass dict as single argument
-            args = [paramsDict]
-        } else if params != nil {
-            args = [params!]
-        } else {
-            args = []
-        }
-        return try await definitionContainer.call(method: method, args: args)
-    }
-    
-    /// Handle an incoming RPC call with args array (legacy style)
-    public func handleCall(method: String, args: [Any]) async throws -> Any? {
-        return try await definitionContainer.call(method: method, args: args)
-    }
-    
-    /// Check if this service can handle a method
-    public func canHandle(method: String) -> Bool {
-        return definitionContainer.canHandle(method: method)
-    }
-    
-    // MARK: - Constants
-    
-    /// Get all constants as a dictionary
-    public func getConstants() -> [String: Any?] {
-        return definitionContainer.getConstants()
-    }
-    
-    // MARK: - Subscription Handling
-    
-    /// Called when a client starts observing events
-    public func onStartObserving(event: String? = nil, params: [String: Any]? = nil) {
-        definitionContainer.startObserving(event: event, params: params)
-    }
-    
-    /// Called when a client stops observing events
-    public func onStopObserving(event: String? = nil) {
-        definitionContainer.stopObserving(event: event)
     }
     
     // MARK: - Context Convenience

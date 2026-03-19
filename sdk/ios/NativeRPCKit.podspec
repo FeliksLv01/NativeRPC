@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'NativeRPCKit'
-  s.version          = '0.0.6'
+  s.version          = '0.0.8'
   s.summary          = 'Standalone Swift SDK for NativeRPC protocol'
   s.description      = <<-DESC
 NativeRPCKit is a standalone Swift SDK for implementing the NativeRPC protocol.
@@ -20,6 +20,9 @@ Zero Flutter dependencies - can be used in pure Swift/iOS projects.
   s.preserve_paths = 'Prebuilt/NativeRPCKitMacros', 'scripts/nrpc_swift_flags.rb'
 
   s.pod_target_xcconfig = {
-    'OTHER_SWIFT_FLAGS' => '-load-plugin-executable ${PODS_TARGET_SRCROOT}/Prebuilt/NativeRPCKitMacros#NativeRPCKitMacros'
+    'OTHER_SWIFT_FLAGS' => '-load-plugin-executable ${PODS_ROOT}/NativeRPCKit/Prebuilt/NativeRPCKitMacros#NativeRPCKitMacros'
+  }
+  s.user_target_xcconfig = {
+    'OTHER_SWIFT_FLAGS' => '-load-plugin-executable ${PODS_ROOT}/NativeRPCKit/Prebuilt/NativeRPCKitMacros#NativeRPCKitMacros -enable-experimental-feature SymbolLinkageMarkers'
   }
 end
