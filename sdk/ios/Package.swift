@@ -1,5 +1,4 @@
 // swift-tools-version:5.9
-// The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
 import CompilerPluginSupport
@@ -13,73 +12,42 @@ let package = Package(
         .watchOS(.v6)
     ],
     products: [
-        // The main NativeRPCKit library (includes Scanner, Registrar, SectionItem)
         .library(
             name: "NativeRPCKit",
             targets: ["NativeRPCKit"]
         ),
-        // Macros library (optional, for @NativeRPCService macro support)
-        .library(
-            name: "NativeRPCMacros",
-            targets: ["NativeRPCMacros"]
+        .executable(
+            name: "NativeRPCKitMacros",
+            targets: ["NativeRPCKitMacros"]
         ),
     ],
     dependencies: [
-        // Swift Syntax for macro implementation
-        .package(url: "https://github.com/apple/swift-syntax.git", from: "509.0.0"),
+        .package(url: "https://github.com/apple/swift-syntax.git", from: "602.0.0"),
     ],
     targets: [
-        // Main target (includes Scanner, AutoRegistrar, SectionItem)
-        .target(
-            name: "NativeRPCKit",
-            dependencies: [],
-            path: "Sources/NativeRPCKit",
-            swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency")
-            ]
-        ),
-        
-        // Macro implementation (compiler plugin)
-        .macro(
-            name: "NativeRPCMacrosPlugin",
+        .executableTarget(
+            name: "NativeRPCKitMacros",
             dependencies: [
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
                 .product(name: "SwiftSyntaxBuilder", package: "swift-syntax"),
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
             ],
-            path: "Sources/NativeRPCMacrosPlugin"
+            path: "Sources/NativeRPCKitMacros"
         ),
-        
-        // Macro declaration library (depends on NativeRPCKit for types)
         .target(
-            name: "NativeRPCMacros",
-            dependencies: [
-                "NativeRPCKit",
-                "NativeRPCMacrosPlugin",
-            ],
-            path: "Sources/NativeRPCMacros",
+            name: "NativeRPCKit",
+            dependencies: [],
+            path: "Sources/NativeRPCKit",
             swiftSettings: [
-                .enableExperimentalFeature("StrictConcurrency")
+                .enableExperimentalFeature("StrictConcurrency"),
+                .enableExperimentalFeature("SymbolLinkageMarkers"),
             ]
         ),
-        
-        // Test target for NativeRPCKit
         .testTarget(
             name: "NativeRPCKitTests",
             dependencies: ["NativeRPCKit"],
             path: "Tests/NativeRPCKitTests"
-        ),
-        
-        // Test target for NativeRPCMacros (macro expansion tests)
-        .testTarget(
-            name: "NativeRPCMacrosTests",
-            dependencies: [
-                "NativeRPCMacros",
-                "NativeRPCMacrosPlugin",
-                .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
-            ],
-            path: "Tests/NativeRPCMacrosTests"
         ),
     ],
     swiftLanguageVersions: [.v5]

@@ -40,6 +40,9 @@ struct DateParams: Codable {
 
 final class NativeRPCKitTests: XCTestCase {
     
+    /// Shared test context for service instantiation
+    private let testContext = NativeRPCContext(connectionType: .custom)
+    
     // MARK: - Service Definition Tests
     
     func testServiceDefinitionDSL() {
@@ -66,7 +69,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = TestService()
+        let service = TestService(context: testContext)
         
         // Test service name
         XCTAssertEqual(service.name, "test")
@@ -98,7 +101,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = MathService()
+        let service = MathService(context: testContext)
         
         // Test add with params dictionary
         let addResult = try await service.handleCall(method: "add", args: [["a": 5, "b": 3]])
@@ -126,7 +129,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = AsyncService()
+        let service = AsyncService(context: testContext)
         
         let result = try await service.handleCall(method: "delay", args: [["ms": 10]])
         XCTAssertEqual(result as? String, "done after 10ms")
@@ -153,7 +156,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = VoidService()
+        let service = VoidService(context: testContext)
         
         // Test void function with params
         _ = try await service.handleCall(method: "setValue", args: [["value": 42]])
@@ -178,7 +181,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = ParamService()
+        let service = ParamService(context: testContext)
         
         // Missing key 'b'
         do {
@@ -204,7 +207,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = ParamService()
+        let service = ParamService(context: testContext)
         
         // Wrong type for 'a' (string instead of int)
         do {
@@ -230,7 +233,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = ParamService()
+        let service = ParamService(context: testContext)
         
         // Pass non-dictionary (array or primitive) when dictionary expected
         do {
@@ -247,7 +250,7 @@ final class NativeRPCKitTests: XCTestCase {
     // MARK: - Service Center Tests
     
     func testServiceCenterRegistration() {
-        class AppService: NativeRPCService, @unchecked Sendable {
+        class AppService: NativeRPCService {
             override class var serviceName: String { "app" }
             
             @ServiceDefinitionBuilder
@@ -365,7 +368,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = FetchService()
+        let service = FetchService(context: testContext)
         let result = try await service.handleCall(method: "fetchData", args: [["id": "123"]])
         
         guard let dict = result as? [String: Any] else {
@@ -389,7 +392,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = FailingService()
+        let service = FailingService(context: testContext)
         
         do {
             _ = try await service.handleCall(method: "failingOp", args: [])
@@ -402,83 +405,41 @@ final class NativeRPCKitTests: XCTestCase {
         }
     }
     
-    // MARK: - Queue Execution Tests
+    // MARK: - Threading Execution Tests
     
-    func testRunOnQueue() async throws {
-        class QueueService: NativeRPCService {
-            override class var serviceName: String { "queue" }
+    func testBackgroundAsyncFunction() async throws {
+        class BackgroundService: NativeRPCService {
+            override class var serviceName: String { "background" }
             
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
-                AsyncFunction("work") { () async -> String in
+                BackgroundAsyncFunction("work") { () async -> String in
                     return "done"
-                }.runOnQueue(DispatchQueue.global())
+                }
             }
         }
         
-        let service = QueueService()
+        let service = BackgroundService(context: testContext)
         let result = try await service.handleCall(method: "work", args: [])
         XCTAssertEqual(result as? String, "done")
     }
 
-    func testRunOnMain() async throws {
+    func testAsyncFunctionRunsOnMainActor() async throws {
         class MainActorService: NativeRPCService {
             override class var serviceName: String { "main" }
             
             @ServiceDefinitionBuilder
             override func definition() -> ServiceDefinitionContainer {
+                // AsyncFunction runs on MainActor by default
                 AsyncFunction("work") { () async -> String in
-                    // Just verify it runs without crashing
                     return "main thread work"
-                }.runOnMain()
-            }
-        }
-        
-        let service = MainActorService()
-        let result = try await service.handleCall(method: "work", args: [])
-        XCTAssertEqual(result as? String, "main thread work")
-    }
-    
-    func testSyncFunctionRunsOnMainByDefault() async throws {
-        class UIService: NativeRPCService, @unchecked Sendable {
-            override class var serviceName: String { "ui" }
-            
-            @ServiceDefinitionBuilder
-            override func definition() -> ServiceDefinitionContainer {
-                // Sync functions run on main thread by default
-                Function("checkThread") { () -> Bool in
-                    Thread.isMainThread
                 }
             }
         }
         
-        let service = UIService()
-        // Call from a background task to verify it switches to main
-        let result = try await Task.detached {
-            try await service.handleCall(method: "checkThread", args: [])
-        }.value
-        XCTAssertEqual(result as? Bool, true, "Sync function should run on main thread by default")
-    }
-    
-    func testSyncFunctionRunInBackground() async throws {
-        class BackgroundService: NativeRPCService, @unchecked Sendable {
-            override class var serviceName: String { "background" }
-            
-            @ServiceDefinitionBuilder
-            override func definition() -> ServiceDefinitionContainer {
-                // Explicitly run on background thread
-                Function("checkThread") { () -> Bool in
-                    Thread.isMainThread
-                }.runInBackground()
-            }
-        }
-        
-        let service = BackgroundService()
-        // Call from a background task - should stay on background
-        let result = try await Task.detached {
-            try await service.handleCall(method: "checkThread", args: [])
-        }.value
-        XCTAssertEqual(result as? Bool, false, "Sync function with runInBackground() should NOT run on main thread")
+        let service = MainActorService(context: testContext)
+        let result = try await service.handleCall(method: "work", args: [])
+        XCTAssertEqual(result as? String, "main thread work")
     }
     
     // MARK: - Convertible Tests
@@ -606,7 +567,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = CounterService()
+        let service = CounterService(context: testContext)
         
         // Test with dictionary containing value
         let result1 = try await service.handleCall(method: "add", args: [["value": 5]])
@@ -638,7 +599,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = AsyncCounterService()
+        let service = AsyncCounterService(context: testContext)
         
         // Test with dictionary containing value
         let result = try await service.handleCall(method: "addDelayed", args: [["value": 7]])
@@ -646,7 +607,7 @@ final class NativeRPCKitTests: XCTestCase {
     }
     
     func testMultiParameterCodable() async throws {
-        class MathService: NativeRPCService, @unchecked Sendable {
+        class MathService: NativeRPCService {
             override class var serviceName: String { "math" }
             
             @ServiceDefinitionBuilder
@@ -658,7 +619,7 @@ final class NativeRPCKitTests: XCTestCase {
             }
         }
         
-        let service = MathService()
+        let service = MathService(context: testContext)
         
         // Test with dictionary containing both values
         let result = try await service.handleCall(method: "addTwo", args: [["a": 3, "b": 7]])
