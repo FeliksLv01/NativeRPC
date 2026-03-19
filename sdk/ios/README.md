@@ -23,6 +23,24 @@ NativeRPC 是一个 **协议优先的 Swift RPC 框架**，提供声明式的 Sw
 pod 'NativeRPCKit', :git => 'https://github.com/FeliksLv01/NativeRPC.git'
 ```
 
+添加Script
+
+```ruby
+post_install do |installer|
+  nrpc_pod = installer.pod_targets.find { |pt| pt.pod_name == 'NativeRPCKit' }
+  if nrpc_pod
+    nrpc_srcroot = installer.sandbox.local?('NativeRPCKit') ?
+      installer.sandbox.local_podspec('NativeRPCKit').dirname.to_s :
+      File.join(installer.sandbox.root.to_s, 'NativeRPCKit')
+    nrpc_script = File.join(nrpc_srcroot, 'scripts', 'nrpc_swift_flags.rb')
+    if File.exist?(nrpc_script)
+      require nrpc_script
+      inject_nrpc_swift_flags_if_needed(installer)
+    end
+  end
+end
+```
+
 ## 协议
 
 NativeRPC 使用 **简化的 JSON-RPC 2.0** 协议（不带 `jsonrpc` 字段）。
