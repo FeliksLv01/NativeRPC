@@ -543,29 +543,35 @@ final class NativeRPCStub: @unchecked Sendable {
     ///
     /// Call this when the connection closes.
     func shutdown() {
-        // Capture context before async to avoid race
+        // Capture context before barrier to avoid race
         let ctx = interceptorContext
         
-        queue.async(flags: .barrier) { [weak self] in
-            guard let self = self else { return }
-            
-            // Destroy all services and notify interceptors
-            for (name, holder) in self.holders {
-                holder.definition.triggerLifecycle(.destroy)
-                holder.definition.teardown()
-                self.interceptors.didDestroyService(name, context: ctx)
-            }
+        // Atomically snapshot holders and clear internal state.
+        // This must happen inside a barrier to prevent concurrent access.
+        var holdersSnapshot: [(String, ServiceHolder)] = []
+        queue.sync(flags: .barrier) {
+            holdersSnapshot = Array(self.holders)
             self.holders.removeAll()
-            
-            // Clear subscriptions
             self.subscriptions.removeAll()
-            
-            // Clear context storage
             self.context.clearStorage()
-            
-            // Notify interceptors of disconnect
-            self.interceptors.didDisconnect(context: ctx)
         }
+        
+        // Trigger lifecycle callbacks OUTSIDE the barrier.
+        // This is critical: OnDestroy callbacks may call emit() which goes through
+        // sendEventFromService() → queue.sync. If we called triggerLifecycle inside
+        // the barrier, that queue.sync would deadlock (barrier holds exclusive access).
+        //
+        // Note: emit() calls during destroy will be no-ops since holders and
+        // subscriptions are already cleared, which is the expected behavior —
+        // the connection is being torn down.
+        for (name, holder) in holdersSnapshot {
+            holder.definition.triggerLifecycle(.destroy)
+            holder.definition.teardown()
+            interceptors.didDestroyService(name, context: ctx)
+        }
+        
+        // Notify interceptors of disconnect
+        interceptors.didDisconnect(context: ctx)
     }
     
     // MARK: - Introspection
