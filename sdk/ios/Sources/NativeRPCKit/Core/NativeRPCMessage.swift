@@ -122,11 +122,11 @@ public struct NativeRPCResponse: Encodable {
     public let id: String
     
     /// Result data
-    public let result: AnyCodable?
+    public let result: RPCAnyCodable?
     
     public init(id: String, result: Any?) {
         self.id = id
-        self.result = result.map { AnyCodable($0) }
+        self.result = result.map { RPCAnyCodable($0) }
     }
     
     enum CodingKeys: String, CodingKey {
@@ -170,12 +170,12 @@ public struct NativeRPCErrorInfo: Encodable {
     public let message: String
     
     /// Optional additional error data
-    public var data: AnyCodable?
+    public var data: RPCAnyCodable?
     
     public init(from error: NativeRPCError) {
         self.code = error.code
         self.message = error.message
-        self.data = error.data.map { AnyCodable($0) }
+        self.data = error.data.map { RPCAnyCodable($0) }
     }
     
     enum CodingKeys: String, CodingKey {
@@ -202,16 +202,16 @@ public struct NativeRPCNotification: Encodable, Sendable {
     public let method: String
     
     /// Event data
-    public let params: AnyCodable?
+    public let params: RPCAnyCodable?
     
     public init(service: String, event: String, params: Any? = nil) {
         self.method = "\(service).\(event)"
-        self.params = params.map { AnyCodable($0) }
+        self.params = params.map { RPCAnyCodable($0) }
     }
     
     public init(method: String, params: Any? = nil) {
         self.method = method
-        self.params = params.map { AnyCodable($0) }
+        self.params = params.map { RPCAnyCodable($0) }
     }
     
     enum CodingKeys: String, CodingKey {

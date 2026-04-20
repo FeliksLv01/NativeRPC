@@ -59,8 +59,8 @@ public struct NativeRPCRequestInfo: Sendable {
     /// Raw parameters
     public var params: Any? { _params?.value }
     
-    /// Internal storage (AnyCodable for Sendable conformance)
-    private let _params: AnyCodable?
+    /// Internal storage (RPCAnyCodable for Sendable conformance)
+    private let _params: RPCAnyCodable?
     
     /// Request types
     public enum RequestType: String, Sendable {
@@ -82,7 +82,7 @@ public struct NativeRPCRequestInfo: Sendable {
         self.service = service
         self.methodName = methodName
         self.type = type
-        self._params = params.map { AnyCodable($0) }
+        self._params = params.map { RPCAnyCodable($0) }
     }
 }
 
@@ -99,8 +99,8 @@ public struct NativeRPCResponseInfo: Sendable {
     /// Result data (for success)
     public var result: Any? { _result?.value }
     
-    /// Internal storage (AnyCodable for Sendable conformance)
-    private let _result: AnyCodable?
+    /// Internal storage (RPCAnyCodable for Sendable conformance)
+    private let _result: RPCAnyCodable?
     
     /// Error info (for failure)
     public let error: ErrorInfo?
@@ -123,7 +123,7 @@ public struct NativeRPCResponseInfo: Sendable {
     private init(
         id: String,
         isSuccess: Bool,
-        result: AnyCodable?,
+        result: RPCAnyCodable?,
         error: ErrorInfo?,
         duration: TimeInterval
     ) {
@@ -139,7 +139,7 @@ public struct NativeRPCResponseInfo: Sendable {
         NativeRPCResponseInfo(
             id: id,
             isSuccess: true,
-            result: result.map { AnyCodable($0) },
+            result: result.map { RPCAnyCodable($0) },
             error: nil,
             duration: duration
         )
@@ -173,14 +173,14 @@ public struct NativeRPCEventInfo: Sendable {
     /// Event data
     public var params: Any? { _params?.value }
     
-    /// Internal storage (AnyCodable for Sendable conformance)
-    private let _params: AnyCodable?
+    /// Internal storage (RPCAnyCodable for Sendable conformance)
+    private let _params: RPCAnyCodable?
     
     public init(event: String, service: String, eventName: String, params: Any?) {
         self.event = event
         self.service = service
         self.eventName = eventName
-        self._params = params.map { AnyCodable($0) }
+        self._params = params.map { RPCAnyCodable($0) }
     }
 }
 

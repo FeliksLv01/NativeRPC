@@ -1,4 +1,4 @@
-// AnyCodable.swift
+// RPCAnyCodable.swift
 // NativeRPC v2
 //
 // Type-erased Codable wrapper for dynamic JSON values
@@ -11,7 +11,7 @@ import Foundation
 /// Safety invariant: Only JSON-compatible values are stored (Bool, Int, Double,
 /// String, NSNull, Array, Dictionary) which are all value types or immutable.
 @dynamicMemberLookup
-public struct AnyCodable: Codable, @unchecked Sendable {
+public struct RPCAnyCodable: Codable, @unchecked Sendable {
     public let value: Any
     
     public init(_ value: Any) {
@@ -33,9 +33,9 @@ public struct AnyCodable: Codable, @unchecked Sendable {
             self.value = double
         } else if let string = try? container.decode(String.self) {
             self.value = string
-        } else if let array = try? container.decode([AnyCodable].self) {
+        } else if let array = try? container.decode([RPCAnyCodable].self) {
             self.value = array.map { $0.value }
-        } else if let dict = try? container.decode([String: AnyCodable].self) {
+        } else if let dict = try? container.decode([String: RPCAnyCodable].self) {
             self.value = dict.mapValues { $0.value }
         } else {
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported type")
@@ -59,9 +59,9 @@ public struct AnyCodable: Codable, @unchecked Sendable {
         case let string as String:
             try container.encode(string)
         case let array as [Any]:
-            try container.encode(array.map { AnyCodable($0) })
+            try container.encode(array.map { RPCAnyCodable($0) })
         case let dict as [String: Any]:
-            try container.encode(dict.mapValues { AnyCodable($0) })
+            try container.encode(dict.mapValues { RPCAnyCodable($0) })
         case let codable as Encodable:
             try codable.encode(to: encoder)
         default:
@@ -74,14 +74,14 @@ public struct AnyCodable: Codable, @unchecked Sendable {
     
     // MARK: - Dynamic Member Lookup
     
-    public subscript(dynamicMember member: String) -> AnyCodable? {
+    public subscript(dynamicMember member: String) -> RPCAnyCodable? {
         guard let dict = value as? [String: Any] else { return nil }
-        return dict[member].map { AnyCodable($0) }
+        return dict[member].map { RPCAnyCodable($0) }
     }
     
-    public subscript(index: Int) -> AnyCodable? {
+    public subscript(index: Int) -> RPCAnyCodable? {
         guard let array = value as? [Any], index < array.count else { return nil }
-        return AnyCodable(array[index])
+        return RPCAnyCodable(array[index])
     }
     
     // MARK: - Type Accessors
@@ -97,43 +97,43 @@ public struct AnyCodable: Codable, @unchecked Sendable {
 
 // MARK: - ExpressibleBy Literals
 
-extension AnyCodable: ExpressibleByNilLiteral {
+extension RPCAnyCodable: ExpressibleByNilLiteral {
     public init(nilLiteral: ()) {
         self.value = NSNull()
     }
 }
 
-extension AnyCodable: ExpressibleByBooleanLiteral {
+extension RPCAnyCodable: ExpressibleByBooleanLiteral {
     public init(booleanLiteral value: Bool) {
         self.value = value
     }
 }
 
-extension AnyCodable: ExpressibleByIntegerLiteral {
+extension RPCAnyCodable: ExpressibleByIntegerLiteral {
     public init(integerLiteral value: Int) {
         self.value = value
     }
 }
 
-extension AnyCodable: ExpressibleByFloatLiteral {
+extension RPCAnyCodable: ExpressibleByFloatLiteral {
     public init(floatLiteral value: Double) {
         self.value = value
     }
 }
 
-extension AnyCodable: ExpressibleByStringLiteral {
+extension RPCAnyCodable: ExpressibleByStringLiteral {
     public init(stringLiteral value: String) {
         self.value = value
     }
 }
 
-extension AnyCodable: ExpressibleByArrayLiteral {
+extension RPCAnyCodable: ExpressibleByArrayLiteral {
     public init(arrayLiteral elements: Any...) {
         self.value = elements
     }
 }
 
-extension AnyCodable: ExpressibleByDictionaryLiteral {
+extension RPCAnyCodable: ExpressibleByDictionaryLiteral {
     public init(dictionaryLiteral elements: (String, Any)...) {
         self.value = Dictionary(uniqueKeysWithValues: elements)
     }
@@ -141,8 +141,8 @@ extension AnyCodable: ExpressibleByDictionaryLiteral {
 
 // MARK: - Equatable (limited)
 
-extension AnyCodable: Equatable {
-    public static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
+extension RPCAnyCodable: Equatable {
+    public static func == (lhs: RPCAnyCodable, rhs: RPCAnyCodable) -> Bool {
         switch (lhs.value, rhs.value) {
         case (is NSNull, is NSNull):
             return true

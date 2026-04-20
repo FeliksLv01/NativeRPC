@@ -29,7 +29,7 @@
 // - DSLFactories.swift: Name(), Constant(), Function(), AsyncFunction(), Events(), OnStartObserving(), OnStopObserving(), OnCreate(), OnDestroy(), OnActivityEntersForeground(), OnActivityEntersBackground()
 
 // Codable/
-// - AnyCodable.swift: AnyCodable
+// - RPCAnyCodable.swift: RPCAnyCodable
 
 // Connection/
 // - NativeRPCConnection.swift: NativeRPCConnection, CallbackConnection, InMemoryConnectionPair
